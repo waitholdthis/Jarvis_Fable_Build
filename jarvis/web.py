@@ -338,8 +338,9 @@ _PAGE = """<!doctype html>
   .ring { position:absolute; inset:0; border:1px solid rgba(88,230,255,.28); border-radius:50%; box-shadow:0 0 30px rgba(36,217,255,.06) inset; animation:spin 22s linear infinite; }
   .ring:before,.ring:after { content:""; position:absolute; inset:10%; border-radius:50%; border:1px dashed rgba(109,233,255,.32); }
   .ring:after { inset:24%; border-style:solid; border-color:rgba(88,230,255,.14); }
-  .core.active .ring { animation-duration:3s; border-color:rgba(88,230,255,.65); }
-  .orb { width:46%; aspect-ratio:1; border-radius:50%; background:radial-gradient(circle at 40% 35%,#e8fdff 0,#71efff 8%,#128ba8 30%,#03151c 64%); box-shadow:0 0 18px #5ceaff,0 0 65px #21caef88; animation:pulse 3.4s ease-in-out infinite; }
+  .core.active .ring { animation-duration:3s; border-color:rgba(88,230,255,.65); box-shadow:0 0 35px rgba(88,230,255,.16) inset; }
+  .orb { width:78%; aspect-ratio:1; border-radius:50%; filter:drop-shadow(0 0 14px #5ceaff) drop-shadow(0 0 35px #21caef66); animation:pulse 3.4s ease-in-out infinite; cursor:crosshair; }
+  .orb-fallback { background:radial-gradient(circle at 40% 35%,#e8fdff 0,#71efff 8%,#128ba8 30%,#03151c 64%); box-shadow:0 0 18px #5ceaff,0 0 65px #21caef88; }
   .core-label { position:absolute; bottom:-3px; text-align:center; }
   @keyframes spin { to{transform:rotate(360deg)} } @keyframes pulse { 50%{transform:scale(1.07);filter:brightness(1.25)} }
   .conversation { min-height:0; display:flex; flex-direction:column; position:relative; }
@@ -402,7 +403,7 @@ _PAGE = """<!doctype html>
 <main>
  <aside class="rail left">
   <section class="panel"><div class="panel-title eyebrow">System integrity</div><div class="datum"><span class="eyebrow">Neural engine</span><strong id="engine">STANDBY</strong><div class="meter"><i style="width:82%"></i></div></div><div class="datum"><span class="eyebrow">Privacy protocol</span><strong>LOCAL // SECURE</strong></div></section>
-  <section class="panel core-wrap"><div class="core" id="core"><div class="ring"></div><div class="orb"></div><div class="core-label eyebrow">Arc cognition core</div></div></section>
+  <section class="panel core-wrap"><div class="core" id="core"><div class="ring"></div><canvas class="orb" id="orb-canvas" aria-label="JARVIS animated cognition core"></canvas><div class="core-label eyebrow">Arc cognition core</div></div></section>
   <section class="panel"><div class="clock" id="clock">--:--<small>LOCAL NODE TIME</small></div></section>
  </aside>
  <section class="panel conversation"><div class="conversation-head"><span class="eyebrow">Active dialogue</span><span class="eyebrow" id="mode">Awaiting directive</span></div><div id="log"><div class="welcome" id="welcome"><div class="line"></div><div class="hello">Good evening.</div><div>All systems are standing by.<br>How may I assist you?</div></div></div><form id="f"><span class="eyebrow">CMD</span><input id="box" type="text" autocomplete="off" placeholder="Issue a directive..." autofocus><button id="speaker" class="voice-button" type="button" aria-label="Toggle spoken replies" title="Spoken replies enabled">◖))</button><button id="mic" class="voice-button" type="button" aria-label="Speak to JARVIS" title="Click to speak">●</button><button id="send" type="submit" aria-label="Send directive">⌁</button></form></section>
@@ -434,6 +435,50 @@ let dashboardData = null;
 let recognition = null;
 let listening = false;
 let spokenReplies = localStorage.getItem('jarvis-spoken-replies') !== 'off';
+
+function initOrb(){
+  const canvas=document.getElementById('orb-canvas');
+  const gl=canvas.getContext('webgl2',{alpha:true,premultipliedAlpha:false,antialias:true});
+  if(!gl){canvas.classList.add('orb-fallback');return;}
+  const vert=`#version 300 es
+    precision highp float; out vec2 uv;
+    void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.0-1.0,0.0,1.0);}`;
+  const frag=`#version 300 es
+    precision highp float; in vec2 uv; out vec4 outColor;
+    uniform vec2 resolution; uniform float time; uniform float hover; uniform float energy; uniform float rotation;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+    float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1)),f.x),f.y);}
+    float fbm(vec2 p){float v=0.0,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);for(int i=0;i<5;i++){v+=a*noise(p);p=m*p+.17;a*=.5;}return v;}
+    void main(){
+      vec2 p=(uv-.5)*2.0;p.x*=resolution.x/resolution.y;
+      float c=cos(rotation),s=sin(rotation);p=mat2(c,-s,s,c)*p;
+      float r=length(p),ang=atan(p.y,p.x);
+      float warp=fbm(p*2.1+vec2(time*.13,-time*.1));
+      float edge=.69+.075*sin(ang*3.0-time*1.2+warp*5.0)+.045*sin(ang*7.0+time*.8);
+      p+=hover*.055*vec2(sin(p.y*11.0+time*2.0),cos(p.x*10.0-time*1.7));
+      float field=fbm(p*3.0+vec2(time*.22,-time*.16));
+      float plasma=.5+.5*sin(field*8.0-ang*2.0+time*1.15);
+      vec3 cyan=vec3(.14,.88,1.0),ice=vec3(.72,.98,1.0),violet=vec3(.35,.16,.94),navy=vec3(.01,.035,.16);
+      vec3 col=mix(violet,cyan,plasma);col=mix(navy,col,smoothstep(.05,.69,r));
+      float rim=exp(-abs(r-edge)*25.0)*(1.0+energy*.9);
+      float inner=exp(-r*3.3)*(.5+.55*field);
+      float spark=pow(max(0.0,1.0-length(p-vec2(cos(time)*.43,sin(time)*.43))),16.0);
+      col+=ice*(rim*1.45+inner*.55+spark*1.7);col*=.72+energy*.32+hover*.16;
+      float alpha=smoothstep(edge+.075,edge-.025,r)*(.76+rim*.35);alpha*=smoothstep(.03,.16,r);
+      outColor=vec4(col*alpha,alpha);
+    }`;
+  function makeShader(type,source){const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(shader));return shader;}
+  try{
+    const program=gl.createProgram();gl.attachShader(program,makeShader(gl.VERTEX_SHADER,vert));gl.attachShader(program,makeShader(gl.FRAGMENT_SHADER,frag));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+    const uniforms={resolution:gl.getUniformLocation(program,'resolution'),time:gl.getUniformLocation(program,'time'),hover:gl.getUniformLocation(program,'hover'),energy:gl.getUniformLocation(program,'energy'),rotation:gl.getUniformLocation(program,'rotation')};
+    let targetHover=0,currentHover=0,rot=0,last=performance.now();const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    canvas.onpointermove=e=>{const b=canvas.getBoundingClientRect(),x=(e.clientX-b.left)/b.width-.5,y=(e.clientY-b.top)/b.height-.5;targetHover=Math.hypot(x,y)<.42?1:0;};canvas.onpointerleave=()=>targetHover=0;
+    function resize(){const d=Math.min(devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*d)),h=Math.max(1,Math.round(canvas.clientHeight*d));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}
+    function draw(now){resize();const dt=Math.min((now-last)/1000,.05);last=now;currentHover+=(targetHover-currentHover)*.08;if(currentHover>.5)rot+=dt*.35;const active=core.classList.contains('active')?1:0;gl.uniform2f(uniforms.resolution,canvas.width,canvas.height);gl.uniform1f(uniforms.time,reduced?0:now/1000);gl.uniform1f(uniforms.hover,currentHover);gl.uniform1f(uniforms.energy,active);gl.uniform1f(uniforms.rotation,rot);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArrays(gl.TRIANGLES,0,3);requestAnimationFrame(draw);}
+    requestAnimationFrame(draw);
+  }catch(error){console.warn('Orb shader unavailable',error);canvas.classList.add('orb-fallback');}
+}
+initOrb();
 
 function scroll() { log.scrollTop = log.scrollHeight; }
 function add(cls, text) {
@@ -505,8 +550,8 @@ function speakReply(text){
   utterance.rate=.96; utterance.pitch=.88;
   const voices=speechSynthesis.getVoices(); const preferred=voices.find(v=>/Daniel|Google UK English Male|Microsoft David|Alex/i.test(v.name))||voices.find(v=>v.lang?.startsWith('en'));
   if(preferred) utterance.voice=preferred;
-  utterance.onstart=()=>{speaker.classList.add('active');document.getElementById('mode').textContent='VOICE OUTPUT ACTIVE';};
-  utterance.onend=utterance.onerror=()=>{speaker.classList.remove('active');document.getElementById('mode').textContent='AWAITING DIRECTIVE';box.focus();};
+  utterance.onstart=()=>{speaker.classList.add('active');core.classList.add('active');document.getElementById('mode').textContent='VOICE OUTPUT ACTIVE';};
+  utterance.onend=utterance.onerror=()=>{speaker.classList.remove('active');core.classList.remove('active');document.getElementById('mode').textContent='AWAITING DIRECTIVE';box.focus();};
   speechSynthesis.speak(utterance);
 }
 speaker.onclick=()=>{spokenReplies=!spokenReplies;localStorage.setItem('jarvis-spoken-replies',spokenReplies?'on':'off');if(!spokenReplies&&'speechSynthesis' in window)speechSynthesis.cancel();setSpeakerState();toast(spokenReplies?'Spoken replies enabled.':'Spoken replies muted.');};
@@ -515,10 +560,10 @@ setSpeakerState();
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 if(SpeechRecognition){
   recognition=new SpeechRecognition(); recognition.lang=navigator.language||'en-US'; recognition.interimResults=true; recognition.continuous=false;
-  recognition.onstart=()=>{listening=true;mic.classList.add('active');mic.setAttribute('aria-pressed','true');box.placeholder='Listening…';document.getElementById('mode').textContent='MICROPHONE ACTIVE // SPEAK NOW';if('speechSynthesis' in window)speechSynthesis.cancel();};
+  recognition.onstart=()=>{listening=true;mic.classList.add('active');core.classList.add('active');mic.setAttribute('aria-pressed','true');box.placeholder='Listening…';document.getElementById('mode').textContent='MICROPHONE ACTIVE // SPEAK NOW';if('speechSynthesis' in window)speechSynthesis.cancel();};
   recognition.onresult=e=>{let finalText='',interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)finalText+=t;else interim+=t;}box.value=finalText||interim;if(finalText.trim())setTimeout(()=>document.getElementById('f').requestSubmit(),120);};
   recognition.onerror=e=>{if(e.error!=='aborted')toast(e.error==='not-allowed'?'Microphone permission was denied. Allow microphone access in your browser settings.':'Microphone error: '+e.error,true);};
-  recognition.onend=()=>{listening=false;mic.classList.remove('active');mic.setAttribute('aria-pressed','false');box.placeholder='Issue a directive...';if(!send.disabled)document.getElementById('mode').textContent='AWAITING DIRECTIVE';};
+  recognition.onend=()=>{listening=false;mic.classList.remove('active');if(!send.disabled)core.classList.remove('active');mic.setAttribute('aria-pressed','false');box.placeholder='Issue a directive...';if(!send.disabled)document.getElementById('mode').textContent='AWAITING DIRECTIVE';};
   mic.onclick=()=>{if(listening)recognition.stop();else{try{recognition.start();}catch(e){toast('Microphone is already active.',true);}};
 }else{
   mic.disabled=true;mic.classList.add('voice-unavailable');mic.title='Speech recognition is not supported by this browser';
