@@ -8,6 +8,10 @@
 #   5. Launch the JARVIS web server and wait for it to respond
 set -uo pipefail
 
+# Ensure user-local binaries (ollama, etc.) are always on PATH
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/.local/lib/ollama:${LD_LIBRARY_PATH:-}"
+
 APP_DIR="/home/waitholdthis/Jarvis_Fable_Build"
 VENV="$APP_DIR/.venv"
 PYTHON="$VENV/bin/python"
