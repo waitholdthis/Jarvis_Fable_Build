@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import html as _html
+import json
 import platform
 import re
 import shutil
@@ -263,6 +264,238 @@ def _register_builtins(reg: ToolRegistry) -> None:
         reg.memory.remember(fact, source="conversation", kind="fact")
         return f"remembered: {fact}"
 
+    def _load_json(name: str, default):
+        path = cfg.workspace / ".jarvis" / name
+        if not path.exists():
+            return default
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return default
+
+    def _save_json(name: str, data) -> None:
+        path = cfg.workspace / ".jarvis" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def create_mission(title: str, objective: str, steps: str) -> str:
+        """Create a durable, checkpointed mission from newline-separated steps."""
+        missions = _load_json("missions.json", {})
+        key = title.strip().lower()
+        items = [s.strip().lstrip("-0123456789. ") for s in steps.splitlines() if s.strip()]
+        if not items:
+            return "ERROR: provide at least one step, separated by newlines"
+        missions[key] = {
+            "title": title.strip(), "objective": objective.strip(),
+            "created": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "steps": [{"task": item, "status": "pending", "note": ""} for item in items],
+        }
+        _save_json("missions.json", missions)
+        return f"mission created: {title} ({len(items)} checkpoints)"
+
+    def update_mission(title: str, step: str, status: str, note: str) -> str:
+        missions = _load_json("missions.json", {})
+        mission = missions.get(title.strip().lower())
+        if mission is None:
+            return f"ERROR: no mission named '{title}'"
+        allowed = {"pending", "active", "blocked", "complete"}
+        status = status.strip().lower()
+        if status not in allowed:
+            return f"ERROR: status must be one of {', '.join(sorted(allowed))}"
+        try:
+            index = int(step) - 1
+            checkpoint = mission["steps"][index]
+        except (ValueError, IndexError):
+            return f"ERROR: step must be 1–{len(mission['steps'])}"
+        checkpoint.update(status=status, note=note.strip(), updated=_dt.datetime.now().isoformat(timespec="seconds"))
+        _save_json("missions.json", missions)
+        return f"updated {title}, checkpoint {index + 1}: {status}"
+
+    def mission_control() -> str:
+        missions = _load_json("missions.json", {})
+        if not missions:
+            return "no active missions"
+        sections = []
+        for mission in missions.values():
+            done = sum(s["status"] == "complete" for s in mission["steps"])
+            lines = [f"MISSION: {mission['title']} — {done}/{len(mission['steps'])} complete",
+                     f"Objective: {mission['objective']}"]
+            lines.extend(f"{i}. [{s['status'].upper()}] {s['task']}" + (f" — {s['note']}" if s.get('note') else "")
+                         for i, s in enumerate(mission["steps"], 1))
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+
+    def record_decision(decision: str, reasoning: str, alternatives: str) -> str:
+        journal = _load_json("decisions.json", [])
+        entry = {"timestamp": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                 "decision": decision.strip(), "reasoning": reasoning.strip(),
+                 "alternatives": alternatives.strip()}
+        journal.append(entry)
+        _save_json("decisions.json", journal[-500:])
+        reg.memory.remember(
+            f"Decision: {entry['decision']}\nReasoning: {entry['reasoning']}\nAlternatives: {entry['alternatives']}",
+            source="decision-journal", kind="fact",
+        )
+        return f"decision recorded at {entry['timestamp']}"
+
+    def privacy_scan(text: str) -> str:
+        """Local heuristic scan before content is copied, shared, or sent online."""
+        patterns = {
+            "email address": r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+            "phone number": r"(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}(?!\d)",
+            "US SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+            "credit-card-like number": r"\b(?:\d[ -]*?){13,19}\b",
+            "private key": r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+            "secret/token assignment": r"(?i)\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*[^\s,;]{6,}",
+        }
+        findings = [(label, len(re.findall(pattern, text, re.IGNORECASE))) for label, pattern in patterns.items()]
+        findings = [(label, count) for label, count in findings if count]
+        if not findings:
+            return "privacy scan: no common sensitive-data patterns detected (heuristic, not a guarantee)"
+        return "PRIVACY WARNING\n" + "\n".join(f"- {label}: {count} match(es)" for label, count in findings)
+
+    def workspace_radar(path: str = ".") -> str:
+        root = reg.resolve_read_path(path)
+        if not root.is_dir():
+            return f"ERROR: not a directory: {root}"
+        now = _dt.datetime.now().timestamp()
+        changed = []
+        for item in root.rglob("*"):
+            if any(part in {".git", ".venv", "node_modules", "__pycache__"} for part in item.parts):
+                continue
+            if item.is_file():
+                try:
+                    age = now - item.stat().st_mtime
+                except OSError:
+                    continue
+                if age <= 86400:
+                    changed.append((item.stat().st_mtime, item, age))
+        changed.sort(reverse=True)
+        if not changed:
+            return f"workspace radar: no files changed in the last 24 hours under {root}"
+        lines = [f"workspace radar: {len(changed)} files changed in the last 24 hours (showing {min(30, len(changed))})"]
+        for _, item, age in changed[:30]:
+            relative = item.relative_to(root)
+            when = f"{int(age // 60)}m ago" if age < 3600 else f"{age / 3600:.1f}h ago"
+            lines.append(f"- {relative} — {when}")
+        return "\n".join(lines)
+
+    def situation_room() -> str:
+        stats = reg.memory.stats()
+        missions = mission_control()
+        recent = reg.memory.recent(limit=6)
+        dialogue = "\n".join(f"- {role}: {content[:180]}" for role, content in recent) or "(none)"
+        return (f"SITUATION ROOM — {_dt.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')}\n"
+                f"Memory: {stats['episodic_entries']} episodes, {stats['semantic_chunks']} knowledge chunks, {stats['facts']} facts\n\n"
+                f"{missions}\n\nRECENT SIGNALS\n{dialogue}")
+
+    def run_diagnostics() -> str:
+        """Run non-destructive health checks across the live JARVIS stack."""
+        checks: list[tuple[str, str, str]] = []
+
+        def check(name: str, status: str, detail: str) -> None:
+            checks.append((name, status, detail.replace("\n", " ")[:300]))
+
+        # Cognitive engine: local endpoints get a real connectivity probe;
+        # cloud engines are configuration-checked without spending tokens.
+        provider = getattr(cfg, "provider", "local").lower()
+        if provider in ("", "local", "ollama", "auto"):
+            try:
+                from .llm import KNOWN_ENDPOINTS, _probe
+                endpoints = ([cfg.api_base] if cfg.api_base else []) + [base for _, base in KNOWN_ENDPOINTS]
+                live = None
+                for endpoint in dict.fromkeys(endpoints):
+                    try:
+                        models = _probe(endpoint, timeout=1.5)
+                        if models:
+                            live = (endpoint, models)
+                            break
+                    except Exception:
+                        continue
+                if live:
+                    check("Cognitive engine", "PASS", f"{live[0]} serving {len(live[1])} model(s)")
+                else:
+                    check("Cognitive engine", "FAIL", "no configured local model endpoint responded")
+            except Exception as exc:
+                check("Cognitive engine", "FAIL", f"probe error: {type(exc).__name__}: {exc}")
+        else:
+            key_present = bool(cfg.provider_key(provider))
+            check("Cognitive engine", "PASS" if key_present else "FAIL",
+                  f"{provider} configured; credential present" if key_present else f"{provider} credential missing")
+
+        try:
+            with reg.memory._lock:
+                integrity = reg.memory._conn.execute("PRAGMA quick_check").fetchone()[0]
+            stats = reg.memory.stats()
+            check("Memory database", "PASS" if integrity == "ok" else "FAIL",
+                  f"SQLite {integrity}; {stats['episodic_entries']} episodes, {stats['semantic_chunks']} chunks")
+        except Exception as exc:
+            check("Memory database", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        probe = cfg.workspace / ".jarvis-diagnostic-probe"
+        try:
+            cfg.workspace.mkdir(parents=True, exist_ok=True)
+            probe.write_text("jarvis-health-check", encoding="utf-8")
+            valid = probe.read_text(encoding="utf-8") == "jarvis-health-check"
+            probe.unlink(missing_ok=True)
+            check("Workspace I/O", "PASS" if valid else "FAIL", f"read/write verified at {cfg.workspace}")
+        except Exception as exc:
+            probe.unlink(missing_ok=True)
+            check("Workspace I/O", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        try:
+            disk = shutil.disk_usage(cfg.workspace)
+            free_gb = disk.free / 1e9
+            status = "PASS" if free_gb >= 5 else "WARN" if free_gb >= 1 else "FAIL"
+            check("Storage", status, f"{free_gb:.1f} GB free of {disk.total / 1e9:.1f} GB")
+        except Exception as exc:
+            check("Storage", "FAIL", str(exc))
+
+        safe = sum(tool.tier is Tier.SAFE for tool in reg.tools.values())
+        gated = sum(tool.tier is Tier.CONFIRM for tool in reg.tools.values())
+        check("Tool broker", "PASS" if safe else "FAIL", f"{safe} safe tools, {gated} permission-gated tools")
+
+        scheduler = reg.get("list_scheduled")
+        if scheduler:
+            result = reg.run("list_scheduled", {})
+            check("Scheduler", "FAIL" if result.startswith("ERROR:") else "PASS", result)
+        else:
+            check("Scheduler", "WARN", "scheduler is not attached to this session")
+
+        try:
+            from . import voice
+            browser_voice = "browser microphone and speech available through the web dashboard"
+            native_input = voice.asr_available()
+            native_output = bool(
+                __import__("importlib").util.find_spec("pyttsx3")
+                or shutil.which("espeak") or shutil.which("spd-say") or platform.system() in ("Darwin", "Windows")
+            )
+            status = "PASS" if native_input and native_output else "WARN"
+            check("Voice systems", status,
+                  f"native input={'ready' if native_input else 'optional extras absent'}, native output={'ready' if native_output else 'unavailable'}; {browser_voice}")
+        except Exception as exc:
+            check("Voice systems", "WARN", f"voice probe unavailable: {exc}")
+
+        configured_mcp = getattr(cfg, "mcp_servers", {}) or {}
+        if not configured_mcp:
+            check("MCP extensions", "PASS", "none configured (optional)")
+        else:
+            missing = []
+            for name, spec in configured_mcp.items():
+                command = spec.get("command", []) if isinstance(spec, dict) else []
+                if not command or not shutil.which(str(command[0])):
+                    missing.append(name)
+            check("MCP extensions", "WARN" if missing else "PASS",
+                  f"{len(configured_mcp) - len(missing)}/{len(configured_mcp)} commands available" + (f"; missing: {', '.join(missing)}" if missing else ""))
+
+        counts = {level: sum(status == level for _, status, _ in checks) for level in ("PASS", "WARN", "FAIL")}
+        overall = "OPERATIONAL" if not counts["FAIL"] else "DEGRADED"
+        lines = [f"JARVIS DIAGNOSTIC REPORT — {overall}",
+                 _dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"), ""]
+        lines.extend(f"[{status}] {name}: {detail}" for name, status, detail in checks)
+        lines.extend(["", f"SUMMARY: {counts['PASS']} passed · {counts['WARN']} warnings · {counts['FAIL']} failed"])
+        return "\n".join(lines)
+
     def shell(command: str) -> str:
         proc = subprocess.run(
             command,
@@ -326,6 +559,33 @@ def _register_builtins(reg: ToolRegistry) -> None:
     reg.register(Tool(
         "remember_fact", "Store a durable fact about the user or their setup.",
         {"fact": "the fact to remember"}, remember_fact,
+    ))
+    reg.register(Tool(
+        "create_mission", "Create a durable mission with checkpointed steps that persists across sessions.",
+        {"title": "mission name", "objective": "definition of success", "steps": "one checkpoint per line"}, create_mission,
+    ))
+    reg.register(Tool(
+        "update_mission", "Update a mission checkpoint as pending, active, blocked, or complete.",
+        {"title": "mission name", "step": "checkpoint number", "status": "pending, active, blocked, or complete", "note": "progress or blocker note"}, update_mission,
+    ))
+    reg.register(Tool("mission_control", "Show every persistent mission and checkpoint status.", {}, mission_control))
+    reg.register(Tool(
+        "record_decision", "Record a decision, rationale, and rejected alternatives in durable searchable memory.",
+        {"decision": "decision made", "reasoning": "why", "alternatives": "options not chosen"}, record_decision,
+    ))
+    reg.register(Tool(
+        "privacy_scan", "Locally inspect text for common secrets and personal data before sharing it.",
+        {"text": "content to inspect"}, privacy_scan,
+    ))
+    reg.register(Tool(
+        "workspace_radar", "Show files changed in the last 24 hours to recover project context quickly.",
+        {"path": "directory path"}, workspace_radar,
+    ))
+    reg.register(Tool("situation_room", "Synthesize missions, memory health, and recent signals into one local briefing.", {}, situation_room))
+    reg.register(Tool(
+        "run_diagnostics",
+        "Run JARVIS self-diagnostics across the reasoning engine, memory, workspace, storage, tools, scheduler, voice, and MCP extensions. Use whenever the user says run diagnostics or asks if everything is functioning.",
+        {}, run_diagnostics,
     ))
     reg.register(Tool(
         "shell", "Run a shell command in the workspace (60 s timeout).",

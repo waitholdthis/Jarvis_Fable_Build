@@ -20,6 +20,7 @@ def _default_home() -> Path:
 @dataclass
 class Config:
     # LLM endpoint. Empty api_base means "auto-detect a local runtime".
+    provider: str = "local"
     api_base: str = ""
     api_key: str = ""
     model: str = ""
@@ -82,6 +83,7 @@ class Config:
                     setattr(cfg, key, value)
 
         env_map = {
+            "JARVIS_PROVIDER": "provider",
             "JARVIS_API_BASE": "api_base",
             "OPENAI_BASE_URL": "api_base",
             "JARVIS_API_KEY": "api_key",
@@ -97,3 +99,16 @@ class Config:
         if os.environ.get("JARVIS_MODEL"):
             cfg.model = os.environ["JARVIS_MODEL"]
         return cfg
+
+    def provider_key(self, provider: str) -> str:
+        """Read cloud credentials from the environment without persisting them."""
+        names = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "perplexity": "PERPLEXITY_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "codex": "OPENAI_API_KEY",
+        }
+        env_name = names.get(provider.lower())
+        return os.environ.get(env_name, "") if env_name else self.api_key

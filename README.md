@@ -15,6 +15,10 @@ tools), scaled from a dual-GPU node down to a laptop.
 ## What it does
 
 - **Chat with any local model**, streaming, in your terminal.
+- **Switch reasoning engines without switching assistants** — route the same
+  JARVIS memory, tools, missions, and persona through local Ollama/LM Studio,
+  Claude, Gemini, Perplexity Sonar, OpenAI, or Codex models. Cloud credentials
+  stay in environment variables and are never exposed to the browser.
 - **Persistent memory** — an episodic log of every exchange plus a semantic
   store of facts and documents, in a single SQLite file.
 - **RAG over your files** — `/ingest ~/notes` indexes text, markdown, code,
@@ -182,6 +186,38 @@ schedule = "every day at 08:00"
 
 Environment: `JARVIS_API_BASE`, `JARVIS_MODEL`, `JARVIS_API_KEY`,
 `JARVIS_HOME` (data directory, default `~/.jarvis`).
+
+### Optional cloud reasoning engines
+
+Local auto-detection remains the default. To start on a cloud provider, set its
+key and `JARVIS_PROVIDER`; or configure several keys and switch live from the
+web dashboard's **Cognitive Engine Router**:
+
+```bash
+# Claude
+export ANTHROPIC_API_KEY="..."
+export JARVIS_PROVIDER=claude
+
+# Gemini
+export GEMINI_API_KEY="..."
+export JARVIS_PROVIDER=gemini
+
+# Perplexity Sonar
+export PERPLEXITY_API_KEY="..."
+export JARVIS_PROVIDER=perplexity
+
+# OpenAI / Codex models
+export OPENAI_API_KEY="..."
+export JARVIS_PROVIDER=codex   # or: openai
+
+# Optional for any provider: override its default model
+export JARVIS_MODEL="provider-model-id"
+```
+
+Restart JARVIS after adding environment variables. Requests sent to a cloud
+engine leave the machine and are subject to that provider's data policies;
+local memory and the tool broker remain on-device. Use `JARVIS_PROVIDER=local`
+to return to Ollama or another auto-detected local runtime.
 
 ### Optional extras
 

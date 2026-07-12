@@ -1,5 +1,5 @@
 from jarvis.config import Config
-from jarvis.llm import NoRuntimeError, detect, pick_model
+from jarvis.llm import AnthropicClient, GeminiClient, NoRuntimeError, cloud_client, detect, pick_model
 
 
 def test_pick_model_prefers_instruct_generalists():
@@ -52,3 +52,32 @@ def test_detect_uses_configured_endpoint_first(monkeypatch):
     client = detect(config)
     assert client.model == "my-model"
     assert client.runtime_name == "configured endpoint"
+
+
+def test_cloud_provider_clients_use_environment_keys(monkeypatch):
+    config = Config()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "claude-secret")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    assert isinstance(cloud_client(config, "claude"), AnthropicClient)
+    assert isinstance(cloud_client(config, "gemini"), GeminiClient)
+    assert cloud_client(config, "perplexity").api_base.endswith("/v1")
+    assert cloud_client(config, "codex").runtime_name == "Codex"
+
+
+def test_cloud_provider_missing_key_is_explicit(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        cloud_client(Config(), "claude")
+        raise AssertionError("expected missing-key error")
+    except NoRuntimeError as exc:
+        assert "ANTHROPIC_API_KEY" in str(exc)
+
+
+def test_detect_uses_selected_cloud_provider(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    config = Config(provider="gemini", model="gemini-custom")
+    client = detect(config)
+    assert isinstance(client, GeminiClient)
+    assert client.model == "gemini-custom"

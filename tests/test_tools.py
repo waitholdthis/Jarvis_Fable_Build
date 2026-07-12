@@ -68,6 +68,66 @@ def test_current_time_runs(registry):
     assert any(ch.isdigit() for ch in out)
 
 
+def test_mission_control_persists_checkpoints(registry):
+    created = registry.run("create_mission", {
+        "title": "Launch", "objective": "Ship safely",
+        "steps": "Run tests\nBuild release\nVerify deployment",
+    })
+    assert "3 checkpoints" in created
+    updated = registry.run("update_mission", {
+        "title": "Launch", "step": "1", "status": "complete", "note": "green",
+    })
+    assert "complete" in updated
+    control = registry.run("mission_control", {})
+    assert "1/3 complete" in control
+    assert "[COMPLETE] Run tests — green" in control
+
+
+def test_decision_journal_becomes_searchable_memory(registry):
+    result = registry.run("record_decision", {
+        "decision": "Use SQLite", "reasoning": "Local-first reliability",
+        "alternatives": "Hosted database",
+    })
+    assert "decision recorded" in result
+    found = registry.run("search_memory", {"query": "why SQLite"})
+    assert "Local-first reliability" in found
+
+
+def test_privacy_scan_detects_sensitive_patterns(registry):
+    clean = registry.run("privacy_scan", {"text": "ordinary project notes"})
+    assert "no common sensitive" in clean
+    warning = registry.run("privacy_scan", {
+        "text": "Email me at person@example.com and use api_key=supersecret123"
+    })
+    assert "PRIVACY WARNING" in warning
+    assert "email address" in warning
+    assert "secret/token assignment" in warning
+
+
+def test_workspace_radar_and_situation_room(registry):
+    registry.run("write_file", {"path": "active.txt", "content": "in progress"})
+    radar = registry.run("workspace_radar", {"path": "."})
+    assert "active.txt" in radar
+    situation = registry.run("situation_room", {})
+    assert "SITUATION ROOM" in situation
+    assert "Memory:" in situation
+
+
+def test_self_diagnostics_reports_every_core_subsystem(registry, monkeypatch):
+    import jarvis.llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "_probe", lambda base, timeout=1.5: ["test-model"])
+    report = registry.run("run_diagnostics", {})
+    assert "JARVIS DIAGNOSTIC REPORT — OPERATIONAL" in report
+    for subsystem in (
+        "Cognitive engine", "Memory database", "Workspace I/O", "Storage",
+        "Tool broker", "Scheduler", "Voice systems", "MCP extensions",
+    ):
+        assert subsystem in report
+    assert "[PASS] Memory database" in report
+    assert not (registry.config.workspace / ".jarvis-diagnostic-probe").exists()
+
+
 def test_parse_ddg_results():
     from jarvis.tools import parse_ddg_results
 

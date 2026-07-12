@@ -86,6 +86,113 @@ class LLMClient:
         return "".join(self.chat_stream(messages, temperature))
 
 
+@dataclass
+class AnthropicClient:
+    api_key: str
+    model: str
+    api_base: str = "https://api.anthropic.com/v1"
+    runtime_name: str = "Claude"
+    timeout: float = 120.0
+
+    def chat_stream(self, messages: list[dict], temperature: float = 0.7) -> Iterator[str]:
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        conversation = [m for m in messages if m["role"] in ("user", "assistant")]
+        payload = {"model": self.model, "max_tokens": 8192, "messages": conversation,
+                   "temperature": temperature, "stream": True}
+        if system:
+            payload["system"] = system
+        headers = {"content-type": "application/json", "x-api-key": self.api_key,
+                   "anthropic-version": "2023-06-01"}
+        with httpx.Client(timeout=self.timeout) as client:
+            with client.stream("POST", f"{self.api_base}/messages", json=payload, headers=headers) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "content_block_delta":
+                        text = (event.get("delta") or {}).get("text")
+                        if text:
+                            yield text
+
+    def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
+        return "".join(self.chat_stream(messages, temperature))
+
+
+@dataclass
+class GeminiClient:
+    api_key: str
+    model: str
+    api_base: str = "https://generativelanguage.googleapis.com/v1beta"
+    runtime_name: str = "Gemini"
+    timeout: float = 120.0
+
+    def chat_stream(self, messages: list[dict], temperature: float = 0.7) -> Iterator[str]:
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                     "parts": [{"text": m["content"]}]}
+                    for m in messages if m["role"] in ("user", "assistant")]
+        payload = {"contents": contents, "generationConfig": {"temperature": temperature}}
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        url = f"{self.api_base}/models/{self.model}:streamGenerateContent?alt=sse"
+        with httpx.Client(timeout=self.timeout) as client:
+            with client.stream("POST", url, json=payload,
+                               headers={"content-type": "application/json", "x-goog-api-key": self.api_key}) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    candidates = chunk.get("candidates") or []
+                    if not candidates:
+                        continue
+                    for part in ((candidates[0].get("content") or {}).get("parts") or []):
+                        if part.get("text"):
+                            yield part["text"]
+
+    def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
+        return "".join(self.chat_stream(messages, temperature))
+
+
+PROVIDER_PROFILES = {
+    "anthropic": {"label": "Claude", "model": "claude-sonnet-4-5"},
+    "claude": {"label": "Claude", "model": "claude-sonnet-4-5"},
+    "gemini": {"label": "Gemini", "model": "gemini-2.5-flash"},
+    "perplexity": {"label": "Perplexity", "model": "sonar-pro"},
+    "openai": {"label": "OpenAI", "model": "gpt-5.4"},
+    "codex": {"label": "Codex", "model": "gpt-5.3-codex"},
+}
+
+
+def cloud_client(config: Config, provider: str, model: str = ""):
+    """Create a cloud client while keeping credentials environment-only."""
+    provider = provider.lower().strip()
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile is None:
+        raise ValueError(f"unknown provider: {provider}")
+    key = config.provider_key(provider)
+    if not key:
+        env = {"claude": "ANTHROPIC_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+               "gemini": "GEMINI_API_KEY", "perplexity": "PERPLEXITY_API_KEY",
+               "openai": "OPENAI_API_KEY", "codex": "OPENAI_API_KEY"}[provider]
+        raise NoRuntimeError(f"{profile['label']} is not configured. Set {env} before starting JARVIS.")
+    selected = model or profile["model"]
+    if provider in ("claude", "anthropic"):
+        return AnthropicClient(key, selected)
+    if provider == "gemini":
+        return GeminiClient(key, selected)
+    bases = {"perplexity": "https://api.perplexity.ai/v1",
+             "openai": "https://api.openai.com/v1", "codex": "https://api.openai.com/v1"}
+    return LLMClient(bases[provider], selected, key, profile["label"])
+
+
 def _probe(base: str, timeout: float = 0.6) -> list[str]:
     """Return model ids served at an OpenAI-compatible base URL, or raise."""
     response = httpx.get(f"{base.rstrip('/')}/models", timeout=timeout)
@@ -110,6 +217,8 @@ def pick_model(models: list[str], requested: str = "") -> str:
 
 def detect(config: Config) -> LLMClient:
     """Find a usable LLM runtime, honoring explicit configuration first."""
+    if config.provider.lower() not in ("", "local", "ollama", "auto"):
+        return cloud_client(config, config.provider, config.model)
     candidates: list[tuple[str, str]] = []
     if config.api_base:
         candidates.append(("configured endpoint", config.api_base))
