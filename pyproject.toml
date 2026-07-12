@@ -24,6 +24,62 @@ voice = [
 rag = [
     "sentence-transformers>=3.0",
 ]
+# Section 12: encrypted-file vault fallback (macOS/Linux with no system keyring)
+vault = [
+    "cryptography>=42.0",
+]
+# Section 4: inotify/FSEvents filesystem watcher (polling fallback is built-in)
+monitor = [
+    "watchdog>=4.0",
+]
+# Section 5: Google Workspace (Gmail + Calendar)
+google = [
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
+]
+# Section 1: Face recognition (InsightFace preferred; OpenCV Haar cascade fallback is built-in)
+vision = [
+    "opencv-python>=4.9",
+    "insightface>=0.7",
+    "onnxruntime>=1.17",
+]
+# Section 6: Columnar OLAP analytics (SQLite fallback is built-in)
+streaming = [
+    "duckdb>=0.10",
+]
+# Section 7: Modal Labs Firecracker microVM cloud sandboxes
+cloud = [
+    "modal>=0.60",
+]
+# Section 11: PDF + chart generation (plain-text + Graphviz DOT fallbacks built-in)
+reports = [
+    "matplotlib>=3.8",
+]
+# Section 4: Keyboard event monitoring for typing-velocity fatigue signal
+fatigue = [
+    "pynput>=1.7",
+]
+# Everything for a fully-featured local deployment
+all = [
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4",
+    "numpy>=1.24",
+    "pyttsx3>=2.90",
+    "sentence-transformers>=3.0",
+    "cryptography>=42.0",
+    "watchdog>=4.0",
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
+    "opencv-python>=4.9",
+    "insightface>=0.7",
+    "onnxruntime>=1.17",
+    "duckdb>=0.10",
+    "modal>=0.60",
+    "matplotlib>=3.8",
+    "pynput>=1.7",
+]
 dev = [
     "pytest>=8.0",
 ]

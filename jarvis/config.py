@@ -58,6 +58,78 @@ class Config:
     consolidation_min_new: int = 12
     consolidation_interval_hours: float = 12.0
 
+    # Multi-model routing (Section 8): tier name -> {provider, model}
+    # e.g. {"edge": {"provider": "ollama", "model": "qwen2.5:7b"},
+    #        "heavy": {"provider": "claude", "model": "claude-sonnet-4-6"}}
+    model_tiers: dict = field(default_factory=dict)
+
+    # ICE ensemble (Section 8): enable the generate→test→judge loop
+    ice_enabled: bool = False
+
+    # Filesystem monitor (Section 4): paths to watch for anomaly detection
+    monitor_paths: list = field(default_factory=list)
+    monitor_enabled: bool = False
+
+    # Credential vault (Section 12): backend override
+    # 'auto' picks by OS; 'file' forces the encrypted-file fallback
+    vault_backend: str = "auto"
+
+    # Out-of-band notification hub (Section 12)
+    # {backend: "telegram", telegram_token: "...", telegram_chat_id: "..."}
+    hub: dict = field(default_factory=dict)
+
+    # Google Workspace (Section 5)
+    google_credentials_path: str = ""   # defaults to ~/.jarvis/google_credentials.json
+
+    # Face recognition (Section 1)
+    face_recognition_enabled: bool = False
+    face_db_path: str = ""              # defaults to ~/.jarvis/faces.db
+
+    # Docker sandbox + digital twin (Section 2)
+    docker_enabled: bool = False
+    docker_default_image: str = "python:3.12-slim"
+
+    # Knowledge graph + memory router (Section 3)
+    knowledge_graph_enabled: bool = False
+
+    # Fatigue monitor (Section 4)
+    fatigue_monitor_enabled: bool = False
+    fatigue_sample_interval: float = 300.0   # seconds between posture assessments
+
+    # Real-time streaming / OLAP (Section 6)
+    streaming_enabled: bool = False
+    cdc_tables: list = field(default_factory=list)   # SQLite tables to watch for CDC
+
+    # Cloud sandboxes (Section 7)
+    cloud_backend: str = "local"        # 'modal' | 'webhook' | 'local'
+    modal_app_name: str = "jarvis"
+    hydration_base_url: str = ""        # base URL for artifact hydration sync
+
+    # Reports engine (Section 11)
+    reports_output_dir: str = ""        # defaults to ~/.jarvis/reports
+
+    # Agent swarm
+    swarm_enabled: bool = True          # on by default — zero cost until agents are spawned
+
+    # Internet access
+    internet_enabled: bool = True       # web search, fetch, API calls, real-time data
+
+    # Workflow engine
+    workflows_enabled: bool = True
+
+    # Autonomous operation
+    autonomy_enabled: bool = False      # off by default — user opts in
+    autonomy_poll_interval: float = 60.0
+    autonomy_curiosity_interval_hours: float = 12.0
+    autonomy_reflection_interval_hours: float = 6.0
+
+    # LoRA calibration (Section 12)
+    calibration_enabled: bool = False
+    calibration_min_pairs: int = 50
+    calibration_backend: str = "ollama"   # 'ollama' | 'llama_cpp' | 'custom'
+    calibration_base_model: str = "qwen2.5:7b"
+    calibration_custom_command: str = ""
+
     @property
     def db_path(self) -> Path:
         return self.home / "memory.db"

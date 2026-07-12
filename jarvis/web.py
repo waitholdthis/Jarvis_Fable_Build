@@ -564,7 +564,7 @@ if(SpeechRecognition){
   recognition.onresult=e=>{let finalText='',interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)finalText+=t;else interim+=t;}box.value=finalText||interim;if(finalText.trim())setTimeout(()=>document.getElementById('f').requestSubmit(),120);};
   recognition.onerror=e=>{if(e.error!=='aborted')toast(e.error==='not-allowed'?'Microphone permission was denied. Allow microphone access in your browser settings.':'Microphone error: '+e.error,true);};
   recognition.onend=()=>{listening=false;mic.classList.remove('active');if(!send.disabled)core.classList.remove('active');mic.setAttribute('aria-pressed','false');box.placeholder='Issue a directive...';if(!send.disabled)document.getElementById('mode').textContent='AWAITING DIRECTIVE';};
-  mic.onclick=()=>{if(listening)recognition.stop();else{try{recognition.start();}catch(e){toast('Microphone is already active.',true);}};
+  mic.onclick=()=>{if(listening)recognition.stop();else{try{recognition.start();}catch(e){toast('Microphone is already active.',true);}}};
 }else{
   mic.disabled=true;mic.classList.add('voice-unavailable');mic.title='Speech recognition is not supported by this browser';
 }

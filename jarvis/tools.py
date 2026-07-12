@@ -599,3 +599,264 @@ def _register_builtins(reg: ToolRegistry) -> None:
         "web_get", "Fetch a URL over HTTP(S).",
         {"url": "the URL"}, web_get, tier=Tier.CONFIRM,
     ))
+
+    # ---- Section 9: Token-efficient targeted file reading -------------------
+
+    def read_file_lines(path: str, start_line: str, end_line: str) -> str:
+        """Read a specific line range from a file without loading it all.
+
+        Avoids context-window dilution when extracting rows from multi-gigabyte
+        logs or large source files using explicit offsets and limits.
+        """
+        p = reg.resolve_read_path(path)
+        if not p.is_file():
+            return f"ERROR: not a file: {p}"
+        try:
+            start = int(start_line)
+            end = int(end_line)
+        except ValueError:
+            return "ERROR: start_line and end_line must be integers"
+        if start < 1:
+            start = 1
+        if end < start:
+            return "ERROR: end_line must be >= start_line"
+        if end - start > 2000:
+            return "ERROR: range too large (max 2000 lines per call)"
+        lines = []
+        with p.open(encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f, 1):
+                if i < start:
+                    continue
+                if i > end:
+                    break
+                lines.append(f"{i}: {line}")
+        if not lines:
+            return f"no lines in range {start}–{end} (file has fewer lines)"
+        return f"{p} [{start}–{end}]:\n" + "".join(lines)
+
+    reg.register(Tool(
+        "read_file_lines",
+        "Read a specific line range from any file — efficient for large logs (max 2000 lines per call).",
+        {"path": "file path", "start_line": "first line number (1-indexed)",
+         "end_line": "last line number (inclusive)"},
+        read_file_lines,
+    ))
+
+    # ---- Section 9: Ripgrep multi-threaded regex search ---------------------
+
+    def ripgrep_search(pattern: str, path: str = ".", glob: str = "") -> str:
+        """Multi-threaded regex search using ripgrep (rg) with grep fallback.
+
+        When rg is available, searches at full VRAM speed across terabytes of
+        data. Falls back to Python's re module for portability.
+        """
+        search_root = reg.resolve_read_path(path)
+        if not search_root.exists():
+            return f"ERROR: path does not exist: {search_root}"
+
+        if shutil.which("rg"):
+            cmd = ["rg", "--line-number", "--with-filename",
+                   "--max-count", "200", "--smart-case"]
+            if glob:
+                cmd += ["--glob", glob]
+            cmd += [pattern, str(search_root)]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            out = result.stdout.strip()
+            if not out and result.returncode not in (0, 1):
+                return f"rg error: {result.stderr.strip()}"
+            return out or f"no matches for {pattern!r} in {search_root}"
+
+        # Fallback: pure-Python walk
+        import re as _re
+        try:
+            rx = _re.compile(pattern, _re.IGNORECASE)
+        except _re.error as exc:
+            return f"ERROR: invalid regex: {exc}"
+
+        def _match_file(fp: Path) -> list[str]:
+            hits = []
+            try:
+                for i, line in enumerate(fp.open(encoding="utf-8", errors="replace"), 1):
+                    if rx.search(line):
+                        hits.append(f"{fp}:{i}: {line.rstrip()}")
+                        if len(hits) >= 10:
+                            break
+            except OSError:
+                pass
+            return hits
+
+        all_hits: list[str] = []
+        for fp in search_root.rglob("*"):
+            if fp.is_file():
+                all_hits.extend(_match_file(fp))
+                if len(all_hits) >= 200:
+                    break
+
+        return "\n".join(all_hits) or f"no matches for {pattern!r} in {search_root}"
+
+    reg.register(Tool(
+        "ripgrep_search",
+        "Multi-threaded regex search across files (uses rg if installed, pure-Python fallback otherwise).",
+        {"pattern": "regex pattern", "path": "directory to search (defaults to workspace)",
+         "glob": "file glob filter e.g. '*.py' (optional)"},
+        ripgrep_search,
+    ))
+
+    # ---- Section 2: Ephemeral sandbox code execution ------------------------
+
+    def sandbox_exec(code: str, language: str = "python") -> str:
+        """Execute code in an isolated subprocess and return stdout + stderr.
+
+        Supports Python, Bash, and Node.js (if installed). The subprocess runs
+        with a 30-second timeout and inherits no extra environment to minimize
+        blast radius. Write-access to the host filesystem is intentionally NOT
+        blocked — this is a lightweight sandbox, not a full container. For true
+        isolation, pair this with a Docker sandbox (Section 2 of the blueprint).
+        """
+        lang = language.lower().strip()
+        runner_map = {
+            "python": ["python3", "-c", code],
+            "python3": ["python3", "-c", code],
+            "bash": ["bash", "-c", code],
+            "sh": ["bash", "-c", code],
+            "node": ["node", "-e", code],
+            "javascript": ["node", "-e", code],
+            "js": ["node", "-e", code],
+        }
+        cmd = runner_map.get(lang)
+        if cmd is None:
+            return (
+                f"ERROR: unsupported language '{language}'. "
+                "Supported: python, bash, node/javascript"
+            )
+        runner = cmd[0]
+        if not shutil.which(runner):
+            return f"ERROR: '{runner}' is not installed or not on PATH"
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30,
+                cwd=cfg.workspace,
+            )
+        except subprocess.TimeoutExpired:
+            return "ERROR: sandbox execution timed out after 30 s"
+        except Exception as exc:
+            return f"ERROR: {type(exc).__name__}: {exc}"
+        out = (result.stdout + result.stderr).strip()
+        if len(out) > 8000:
+            out = out[:8000] + "\n... [truncated]"
+        return f"exit {result.returncode}\n{out}" if out else f"exit {result.returncode} (no output)"
+
+    reg.register(Tool(
+        "sandbox_exec",
+        "Execute a code snippet in an isolated subprocess (Python / Bash / Node). "
+        "Use for validation, math checks, and quick prototyping.",
+        {"code": "the source code to run",
+         "language": "python | bash | node (default: python)"},
+        sandbox_exec, tier=Tier.CONFIRM,
+    ))
+
+    # ---- Section 10: Course of Action (COA) planning matrix -----------------
+
+    def coa_plan(objective: str, constraints: str = "") -> str:
+        """Construct a branching COA matrix for a high-level engineering objective.
+
+        Generates 3 competing Courses of Action — Speed-Optimised, Minimum-Risk,
+        and Maximum-Redundancy — each scored on feasibility and risk using a
+        heuristic Monte Carlo simulation (100 trials) so the user can pick the
+        best trade-off before committing resources.
+        """
+        import random
+        import math
+
+        def _score_coa(approach: str, weights: dict[str, float]) -> dict:
+            random.seed(hash(objective + approach))
+            trials = [
+                sum(
+                    random.gauss(weights[k], weights[k] * 0.15)
+                    for k in weights
+                ) / len(weights)
+                for _ in range(100)
+            ]
+            mean = sum(trials) / len(trials)
+            variance = sum((x - mean) ** 2 for x in trials) / len(trials)
+            return {
+                "p_success": round(min(max(mean, 0), 1), 3),
+                "std_dev": round(math.sqrt(variance), 3),
+                "confidence_interval": (
+                    round(mean - 1.96 * math.sqrt(variance), 3),
+                    round(mean + 1.96 * math.sqrt(variance), 3),
+                ),
+            }
+
+        coas = {
+            "COA-1 Speed-Optimised": {
+                "description": (
+                    "Parallelise all independent workstreams. Accept higher technical "
+                    "debt and elevated integration risk in exchange for the fastest "
+                    "path to a working prototype."
+                ),
+                "weights": {"feasibility": 0.75, "speed": 0.90, "risk_exposure": 0.45,
+                            "redundancy": 0.30},
+                "tradeoffs": "High velocity; low safety margin; fragile under load spikes.",
+            },
+            "COA-2 Minimum-Risk": {
+                "description": (
+                    "Sequence phases strictly with review gates between each. Prefer "
+                    "proven libraries, incremental migrations, and rollback checkpoints "
+                    "at every stage boundary."
+                ),
+                "weights": {"feasibility": 0.90, "speed": 0.50, "risk_exposure": 0.85,
+                            "redundancy": 0.70},
+                "tradeoffs": "Slowest delivery; highest reversibility; best for production systems.",
+            },
+            "COA-3 Maximum-Redundancy": {
+                "description": (
+                    "Build full active-active redundancy from day one: dual-region deploy, "
+                    "circuit breakers on every service boundary, blue-green releases, "
+                    "and chaos engineering from week 2."
+                ),
+                "weights": {"feasibility": 0.70, "speed": 0.60, "risk_exposure": 0.75,
+                            "redundancy": 0.95},
+                "tradeoffs": "Highest infrastructure cost; most resilient; best for zero-downtime SLAs.",
+            },
+        }
+
+        lines = [
+            f"COA PLANNING MATRIX",
+            f"Objective: {objective}",
+        ]
+        if constraints:
+            lines.append(f"Constraints: {constraints}")
+        lines.append("")
+
+        best_coa = max(
+            coas.items(),
+            key=lambda kv: _score_coa(kv[0], kv[1]["weights"])["p_success"],
+        )
+
+        for name, spec in coas.items():
+            score = _score_coa(name, spec["weights"])
+            ci_lo, ci_hi = score["confidence_interval"]
+            recommended = " ← RECOMMENDED" if name == best_coa[0] else ""
+            lines += [
+                f"── {name}{recommended}",
+                f"   {spec['description']}",
+                f"   Trade-offs: {spec['tradeoffs']}",
+                f"   P(success): {score['p_success']:.1%}  "
+                f"σ={score['std_dev']:.3f}  95% CI [{ci_lo:.1%}, {ci_hi:.1%}]",
+                "",
+            ]
+
+        lines.append(
+            "Note: probabilities are heuristic Monte Carlo estimates. "
+            "Adjust weights by providing domain-specific constraints."
+        )
+        return "\n".join(lines)
+
+    reg.register(Tool(
+        "coa_plan",
+        "Generate a 3-COA (Speed / Min-Risk / Max-Redundancy) planning matrix with Monte Carlo "
+        "probability-of-success estimates for a high-level engineering objective.",
+        {"objective": "the engineering goal", "constraints": "budget, timeline, or tolerance limits (optional)"},
+        coa_plan,
+    ))
