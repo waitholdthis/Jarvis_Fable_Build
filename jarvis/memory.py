@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,47 +67,57 @@ class Memory:
     def __init__(self, db_path: Path | str, embedder: Embedder | None = None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.executescript(_SCHEMA)
+        # The web UI touches memory from handler and worker threads; SQLite
+        # connections are thread-bound by default, so opt out and serialize
+        # access ourselves with a lock.
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
         self.embedder = embedder or get_embedder()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     # ---- episodic tier ----------------------------------------------------
 
     def log(self, role: str, content: str) -> None:
-        self._conn.execute(
-            "INSERT INTO episodic (ts, role, content) VALUES (?, ?, ?)",
-            (time.time(), role, content),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO episodic (ts, role, content) VALUES (?, ?, ?)",
+                (time.time(), role, content),
+            )
+            self._conn.commit()
 
     def recent(self, limit: int = 12) -> list[tuple[str, str]]:
-        rows = self._conn.execute(
-            "SELECT role, content FROM episodic ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT role, content FROM episodic ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return list(reversed(rows))
 
     # ---- semantic tier ----------------------------------------------------
 
     def remember(self, content: str, source: str = "", kind: str = "doc") -> int:
         vec = self.embedder.embed(content)
-        cur = self._conn.execute(
-            "INSERT INTO semantic (ts, kind, source, content, embedder, embedding)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (time.time(), kind, source, content, self.embedder.name, _pack(vec)),
-        )
-        self._conn.commit()
-        return cur.lastrowid
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO semantic (ts, kind, source, content, embedder, embedding)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (time.time(), kind, source, content, self.embedder.name, _pack(vec)),
+            )
+            self._conn.commit()
+            return cur.lastrowid
 
     def search(self, query: str, top_k: int = 5, min_score: float = 0.12) -> list[Hit]:
         query_vec = self.embedder.embed(query)
         query_tokens = set(tokenize(query))
-        rows = self._conn.execute(
-            "SELECT content, source, kind, embedder, embedding FROM semantic"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT content, source, kind, embedder, embedding FROM semantic"
+            ).fetchall()
 
         hits: list[Hit] = []
         for content, source, kind, embedder_name, blob in rows:
@@ -133,19 +144,21 @@ class Memory:
     def forget(self, pattern: str) -> int:
         """Delete semantic rows whose content or source matches a substring."""
         like = f"%{pattern}%"
-        cur = self._conn.execute(
-            "DELETE FROM semantic WHERE content LIKE ? OR source LIKE ?",
-            (like, like),
-        )
-        self._conn.commit()
-        return cur.rowcount
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM semantic WHERE content LIKE ? OR source LIKE ?",
+                (like, like),
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     def stats(self) -> dict:
-        episodic = self._conn.execute("SELECT COUNT(*) FROM episodic").fetchone()[0]
-        semantic = self._conn.execute("SELECT COUNT(*) FROM semantic").fetchone()[0]
-        facts = self._conn.execute(
-            "SELECT COUNT(*) FROM semantic WHERE kind = 'fact'"
-        ).fetchone()[0]
+        with self._lock:
+            episodic = self._conn.execute("SELECT COUNT(*) FROM episodic").fetchone()[0]
+            semantic = self._conn.execute("SELECT COUNT(*) FROM semantic").fetchone()[0]
+            facts = self._conn.execute(
+                "SELECT COUNT(*) FROM semantic WHERE kind = 'fact'"
+            ).fetchone()[0]
         return {
             "episodic_entries": episodic,
             "semantic_chunks": semantic,

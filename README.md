@@ -27,7 +27,14 @@ tools), scaled from a dual-GPU node down to a laptop.
   function-calling API needed.
 - **Optional voice** — push-to-talk transcription (faster-whisper) and
   spoken replies (pyttsx3 or your OS's built-in speech), via the `[voice]`
-  extra. Without it, Jarvis is simply a text assistant.
+  extra. `jarvis voice` is a fully hands-free loop: an energy-based VAD
+  waits for you to speak, records until you go quiet, transcribes, and
+  answers aloud. Without the extra, Jarvis is simply a text assistant.
+- **Local web UI** — `jarvis serve` hosts a chat page at
+  `http://127.0.0.1:8765` built entirely on the Python standard library
+  (no web framework): streaming via Server-Sent Events, live tool-call
+  visibility, and in-browser Allow/Deny buttons for permission-gated tools.
+  Localhost-only by design.
 
 ## Quickstart
 
@@ -62,6 +69,8 @@ Jarvis: According to [notes/db-plan.md], you planned to...
 | `jarvis` | interactive chat |
 | `jarvis ask "..."` | one-shot question, for scripts |
 | `jarvis ingest <path>` | index files into memory |
+| `jarvis serve [--port N]` | local web UI at 127.0.0.1:8765 |
+| `jarvis voice` | hands-free voice conversation (needs `[voice]`) |
 | `jarvis doctor` | show what this machine supports |
 | `/ingest` `/memory` `/forget` `/tools` `/voice` `/listen` `/new` | in-chat commands |
 

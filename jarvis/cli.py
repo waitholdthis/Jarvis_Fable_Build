@@ -174,6 +174,75 @@ def repl(config: Config) -> int:
     return 0
 
 
+def voice_loop(config: Config) -> int:
+    """Hands-free conversation: speak, get spoken answers. Ctrl-C to exit."""
+    if not voice.asr_available():
+        console.print(
+            "[red]voice mode needs the extras: "
+            "pip install 'jarvis-assistant\\[voice]'[/red]"
+        )
+        return 1
+    config.ensure_dirs()
+    config.voice_enabled = True
+    try:
+        llm = _connect(config)
+    except NoRuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    memory = Memory(config.db_path)
+    tools = ToolRegistry(config, memory)
+    agent = Agent(config, llm, memory, tools, confirm=_confirm)
+
+    console.print(
+        f"[bold]{config.assistant_name} voice mode[/bold] — just talk; "
+        'say "goodbye" or press Ctrl-C to stop.\n'
+    )
+    with console.status("Loading speech model..."):
+        voice.record_and_transcribe(seconds=0.1, model_size=config.whisper_model)
+
+    try:
+        while True:
+            console.print("[dim]listening...[/dim]")
+            heard = voice.listen_until_silence(model_size=config.whisper_model)
+            if not heard:
+                continue
+            console.print(f"[bold green]you:[/bold green] {heard}")
+            if heard.strip(" .!?").lower() in ("goodbye", "bye", "stop", "quit"):
+                voice.speak("Goodbye.")
+                break
+            run_turn(agent, config, heard)
+    except KeyboardInterrupt:
+        console.print("\nGoodbye.")
+    memory.close()
+    return 0
+
+
+def serve_web(config: Config, port: int = 8765) -> int:
+    """Run the local web UI (stdlib server, bound to 127.0.0.1)."""
+    from .web import serve
+
+    config.ensure_dirs()
+    try:
+        llm = _connect(config)
+    except NoRuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    memory = Memory(config.db_path)
+    tools = ToolRegistry(config, memory)
+    agent = Agent(config, llm, memory, tools)
+    console.print(
+        f"[green]✓[/green] web UI at [bold cyan]http://127.0.0.1:{port}[/bold cyan] "
+        "(local machine only — Ctrl-C to stop)"
+    )
+    try:
+        serve(agent, host="127.0.0.1", port=port)
+    except KeyboardInterrupt:
+        console.print("\nStopped.")
+    finally:
+        memory.close()
+    return 0
+
+
 def ask_once(config: Config, question: str) -> int:
     """One-shot mode: `jarvis ask "..."` for scripts and quick queries."""
     config.ensure_dirs()

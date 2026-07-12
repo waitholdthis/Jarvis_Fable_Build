@@ -42,6 +42,53 @@ def record_and_transcribe(seconds: float = 6.0, model_size: str = "base") -> str
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
+def listen_until_silence(
+    max_seconds: float = 30.0,
+    silence_after: float = 1.2,
+    energy_threshold: float = 0.012,
+    model_size: str = "base",
+) -> str:
+    """Hands-free capture: wait for speech, record until the user goes quiet.
+
+    A simple RMS-energy VAD — no extra dependencies beyond the [voice] extra.
+    Returns the transcript, or "" if nothing was heard within max_seconds.
+    """
+    import numpy as np
+    import sounddevice as sd
+
+    sample_rate = 16_000
+    block = int(sample_rate * 0.05)  # 50 ms frames
+    silence_blocks_needed = int(silence_after / 0.05)
+    max_blocks = int(max_seconds / 0.05)
+
+    frames: list = []
+    speech_started = False
+    silent_blocks = 0
+
+    with sd.InputStream(
+        samplerate=sample_rate, channels=1, dtype="float32", blocksize=block
+    ) as stream:
+        for _ in range(max_blocks):
+            data, _overflow = stream.read(block)
+            rms = float(np.sqrt(np.mean(np.square(data))))
+            if not speech_started:
+                if rms >= energy_threshold:
+                    speech_started = True
+                    frames.append(data.copy())
+                continue
+            frames.append(data.copy())
+            silent_blocks = silent_blocks + 1 if rms < energy_threshold else 0
+            if silent_blocks >= silence_blocks_needed:
+                break
+
+    if not speech_started:
+        return ""
+    audio = np.squeeze(np.concatenate(frames))
+    model = _get_whisper(model_size)
+    segments, _info = model.transcribe(audio, beam_size=1, vad_filter=True)
+    return " ".join(seg.text.strip() for seg in segments).strip()
+
+
 _whisper_cache: dict[str, object] = {}
 
 

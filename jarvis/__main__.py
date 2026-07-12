@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     ingest = sub.add_parser("ingest", help="index files into memory")
     ingest.add_argument("path", help="file or directory to ingest")
 
+    serve = sub.add_parser("serve", help="run the local web UI")
+    serve.add_argument("--port", type=int, default=8765, help="port (default 8765)")
+
+    sub.add_parser("voice", help="hands-free voice conversation (needs [voice])")
+
     sub.add_parser("doctor", help="check runtimes, voice, and memory health")
 
     args = parser.parse_args(argv)
@@ -46,6 +51,16 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"ingested {files} file(s), {chunks} chunk(s) into {config.db_path}")
         memory.close()
         return 0
+
+    if args.command == "serve":
+        from .cli import serve_web
+
+        return serve_web(config, port=args.port)
+
+    if args.command == "voice":
+        from .cli import voice_loop
+
+        return voice_loop(config)
 
     if args.command == "doctor":
         return _doctor(config)
