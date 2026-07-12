@@ -61,6 +61,24 @@ if %RESULT% neq 0 (
     exit /b 1
 )
 
-echo  [+] JARVIS is online.  Opening browser ...
-start "" "http://127.0.0.1:8765"
+REM --- Get the WSL2 IP (localhost forwarding is unreliable; use the real IP) ---
+for /f "tokens=*" %%i in ('wsl.exe -d Ubuntu -- cat /tmp/jarvis-wsl-ip 2^>nul') do set WSL_IP=%%i
+if "%WSL_IP%"=="" set WSL_IP=127.0.0.1
+
+set JARVIS_URL=http://%WSL_IP%:8765
+
+echo  [+] JARVIS is online.
+echo.
+echo  ╔══════════════════════════════════════╗
+echo  ║  Open this URL in your browser:      ║
+echo  ║  %JARVIS_URL%              ║
+echo  ╚══════════════════════════════════════╝
+echo.
+echo  Opening browser automatically ...
+start "" "%JARVIS_URL%"
+
+echo.
+echo  If the browser did not open, copy the URL above and paste it manually.
+echo  This window will close in 8 seconds.
+timeout /t 8 /nobreak >nul
 exit /b 0

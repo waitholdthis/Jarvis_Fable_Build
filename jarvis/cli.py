@@ -729,8 +729,8 @@ def voice_loop(config: Config, wake: bool = False) -> int:
     return 0
 
 
-def serve_web(config: Config, port: int = 8765) -> int:
-    """Run the local web UI (stdlib server, bound to 127.0.0.1)."""
+def serve_web(config: Config, port: int = 8765, host: str = "127.0.0.1") -> int:
+    """Run the local web UI."""
     from .web import make_server
 
     # Scheduler notifications also land in the browser; the sink is swapped
@@ -746,10 +746,11 @@ def serve_web(config: Config, port: int = 8765) -> int:
     except NoRuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
-    server = make_server(agent, host="127.0.0.1", port=port)
+    server = make_server(agent, host=host, port=port)
     sink["push"] = server.ui.push
+    display_host = "127.0.0.1" if host == "0.0.0.0" else host
     console.print(
-        f"[green]✓[/green] web UI at [bold cyan]http://127.0.0.1:{port}[/bold cyan] "
+        f"[green]✓[/green] web UI at [bold cyan]http://{display_host}:{port}[/bold cyan] "
         "(local machine only — Ctrl-C to stop)"
     )
     try:

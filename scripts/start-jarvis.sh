@@ -122,6 +122,9 @@ fi
 
 # ─── 5. Start JARVIS web server ───────────────────────────────────────────────
 
+WSL_IP=$(hostname -I | awk '{print $1}')
+echo "$WSL_IP" > /tmp/jarvis-wsl-ip
+
 if curl -fsS --max-time 1 "$URL/" &>/dev/null; then
     ok "JARVIS already running at $URL"
     exit 0
@@ -129,7 +132,10 @@ fi
 
 log "Starting JARVIS web server on port 8765 ..."
 cd "$APP_DIR"
-setsid "$PYTHON" -m jarvis serve --port 8765 >"$LOG" 2>&1 </dev/null &
+# Bind to 0.0.0.0 so Windows can reach it via the WSL2 IP (localhost forwarding is unreliable)
+WSL_IP=$(hostname -I | awk '{print $1}')
+echo "$WSL_IP" > /tmp/jarvis-wsl-ip
+setsid "$PYTHON" -m jarvis serve --host 0.0.0.0 --port 8765 >"$LOG" 2>&1 </dev/null &
 SERVER_PID=$!
 
 # ─── 6. Wait for ready (up to 20 s) ──────────────────────────────────────────

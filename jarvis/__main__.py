@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
 
     serve = sub.add_parser("serve", help="run the local web UI")
     serve.add_argument("--port", type=int, default=8765, help="port (default 8765)")
+    serve.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
 
     voice_cmd = sub.add_parser(
         "voice", help="hands-free voice conversation (needs [voice])"
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         from .cli import serve_web
 
-        return serve_web(config, port=args.port)
+        return serve_web(config, port=args.port, host=args.host)
 
     if args.command == "voice":
         from .cli import voice_loop
