@@ -48,6 +48,23 @@ tools), scaled from a dual-GPU node down to a laptop.
   ("the user's staging server is X") into long-term memory, where retrieval
   finds them in future sessions. Runs automatically at startup (at most
   once per 12 h), or on demand with `jarvis consolidate`.
+- **Reminders & scheduling** — "remind me in 20 minutes to check the oven"
+  just works: the model calls `schedule_task`, tasks persist in SQLite
+  across restarts, and when due they're announced in the terminal or web
+  UI, spoken aloud in voice mode, and pushed as a native desktop
+  notification (notify-send / macOS / Windows). Understands "in 2 hours",
+  "at 18:30", "tomorrow at 9:00", "every 30 minutes", "every day at 08:00".
+- **Routines** — named automations defined in config (or the built-in
+  `briefing`), run on demand (`jarvis briefing`, `/routine standup`) or on
+  a schedule ("every day at 08:00" → your morning briefing arrives as a
+  notification, spoken if voice is on). Scheduled runs execute with
+  confirmations denied, so they can only touch SAFE-tier tools.
+- **Screen vision** — a `see_screen` tool captures the display with
+  OS-native commands (screencapture / gnome-screenshot / grim / PowerShell
+  — still zero dependencies) and describes it with your model, if it's
+  multimodal (`ollama pull qwen2.5vl:7b`). "Jarvis, what's on my screen?"
+- **Web search** — a DuckDuckGo-backed `web_search` tool for current
+  information, permission-gated like everything that leaves the machine.
 
 ## What it feels like
 
@@ -73,8 +90,13 @@ Jarvis: According to [notes/db-plan.md], you planned to...
 | `jarvis serve [--port N]` | local web UI at 127.0.0.1:8765 |
 | `jarvis voice [--wake]` | hands-free voice chat; `--wake` = respond only to "Jarvis, ..." |
 | `jarvis consolidate` | distill recent conversations into long-term facts now |
+| `jarvis routine [name]` | run a routine (no name = list them) |
+| `jarvis briefing` | the built-in status briefing |
 | `jarvis doctor` | show what this machine supports |
-| `/ingest` `/memory` `/forget` `/tools` `/voice` `/listen` `/new` | in-chat commands |
+| `/ingest` `/memory` `/forget` `/routine` `/tools` `/voice` `/listen` `/new` | in-chat commands |
+
+Reminders and scheduled routines fire while any long-running Jarvis session
+(`jarvis`, `jarvis serve`, `jarvis voice`) is open.
 
 ## Run it on your desktop
 
@@ -151,6 +173,11 @@ command = ["uvx", "mcp-server-time"]
 
 [mcp_servers.files]
 command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me/notes"]
+
+# Routines: named automations, optionally on a schedule.
+[routines.morning]
+prompt = "Give me a rundown: time, weather from my notes, today's reminders."
+schedule = "every day at 08:00"
 ```
 
 Environment: `JARVIS_API_BASE`, `JARVIS_MODEL`, `JARVIS_API_KEY`,

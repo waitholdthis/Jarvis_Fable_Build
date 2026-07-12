@@ -66,3 +66,34 @@ def test_remember_and_search_memory_tools(registry):
 def test_current_time_runs(registry):
     out = registry.run("current_time", {})
     assert any(ch.isdigit() for ch in out)
+
+
+def test_parse_ddg_results():
+    from jarvis.tools import parse_ddg_results
+
+    page = """
+    <div class="result">
+      <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&amp;rut=abc">Example <b>Title</b></a>
+      <a class="result__snippet" href="#">A snippet about the &amp; result.</a>
+    </div>
+    <div class="result">
+      <a class="result__a" href="https://direct.example.org/">Direct Result</a>
+      <a class="result__snippet" href="#">Second snippet.</a>
+    </div>
+    """
+    results = parse_ddg_results(page)
+    assert results[0] == (
+        "Example Title",
+        "https://example.com/page",
+        "A snippet about the & result.",
+    )
+    assert results[1][1] == "https://direct.example.org/"
+    assert parse_ddg_results("<html>no results</html>") == []
+
+
+def test_web_search_tool_registered_confirm_tier(registry):
+    from jarvis.tools import Tier
+
+    tool = registry.get("web_search")
+    assert tool is not None
+    assert tool.tier is Tier.CONFIRM

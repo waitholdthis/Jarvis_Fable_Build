@@ -49,6 +49,9 @@ class Config:
     # MCP servers: {name: {"command": ["exe", "arg", ...]}}
     mcp_servers: dict = field(default_factory=dict)
 
+    # Routines: {name: {"prompt": "...", "schedule": "every day at 08:00"}}
+    routines: dict = field(default_factory=dict)
+
     # Background memory consolidation (the "hippocampus" job)
     consolidation_enabled: bool = True
     consolidation_min_new: int = 12

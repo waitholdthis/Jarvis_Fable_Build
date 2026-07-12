@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
         "consolidate", help="distill recent conversations into long-term facts now"
     )
 
+    routine = sub.add_parser("routine", help="run a named routine (no name = list)")
+    routine.add_argument("name", nargs="?", default="")
+
+    sub.add_parser("briefing", help="run the built-in briefing routine")
+
     sub.add_parser("doctor", help="check runtimes, voice, and memory health")
 
     args = parser.parse_args(argv)
@@ -77,6 +82,16 @@ def main(argv: list[str] | None = None) -> int:
         from .cli import consolidate_now
 
         return consolidate_now(config)
+
+    if args.command == "routine":
+        from .cli import routine_cmd
+
+        return routine_cmd(config, args.name)
+
+    if args.command == "briefing":
+        from .cli import routine_cmd
+
+        return routine_cmd(config, "briefing")
 
     if args.command == "doctor":
         return _doctor(config)

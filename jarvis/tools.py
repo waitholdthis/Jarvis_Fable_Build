@@ -16,9 +16,12 @@ should be done by the human.
 from __future__ import annotations
 
 import datetime as _dt
+import html as _html
 import platform
+import re
 import shutil
 import subprocess
+import urllib.parse
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -123,6 +126,88 @@ class ToolRegistry:
         return p
 
 
+def parse_ddg_results(page: str, limit: int = 6) -> list[tuple[str, str, str]]:
+    """Extract (title, url, snippet) triples from DuckDuckGo's HTML endpoint."""
+    titles: list[tuple[str, str]] = []
+    for m in re.finditer(
+        r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        page,
+        re.DOTALL,
+    ):
+        url = _html.unescape(m.group(1))
+        # DDG wraps results in a redirect: //duckduckgo.com/l/?uddg=<encoded>
+        redirect = re.search(r"[?&]uddg=([^&]+)", url)
+        if redirect:
+            url = urllib.parse.unquote(redirect.group(1))
+        title = _html.unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()
+        titles.append((title, url))
+
+    snippets = [
+        _html.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip()
+        for m in re.finditer(
+            r'class="result__snippet"[^>]*>(.*?)</a>', page, re.DOTALL
+        )
+    ]
+    results = []
+    for i, (title, url) in enumerate(titles[:limit]):
+        snippet = snippets[i] if i < len(snippets) else ""
+        results.append((title, url, snippet))
+    return results
+
+
+def register_scheduler_tools(reg: ToolRegistry, scheduler) -> None:
+    """Reminder/automation tools; registered once a Scheduler exists."""
+    from .scheduler import parse_when
+
+    def schedule_task(when: str, message: str) -> str:
+        parsed = parse_when(when)
+        if parsed is None:
+            return (
+                f"ERROR: could not parse '{when}'. Supported forms: "
+                "'in 20 minutes', 'at 18:30', 'tomorrow at 9:00', "
+                "'every 30 minutes', 'every day at 08:00'"
+            )
+        due, repeat = parsed
+        task_id = scheduler.add(due, payload=message, repeat=repeat)
+        due_str = _dt.datetime.fromtimestamp(due).strftime("%Y-%m-%d %H:%M")
+        return f"scheduled #{task_id} for {due_str}" + (
+            " (repeating)" if repeat else ""
+        )
+
+    def list_scheduled() -> str:
+        tasks = scheduler.list_pending()
+        if not tasks:
+            return "nothing scheduled"
+        return "\n".join(task.describe() for task in tasks)
+
+    def cancel_scheduled(task_id: str) -> str:
+        try:
+            numeric = int(str(task_id).lstrip("#"))
+        except ValueError:
+            return f"ERROR: '{task_id}' is not a task id"
+        return (
+            f"cancelled #{numeric}"
+            if scheduler.cancel(numeric)
+            else f"ERROR: no task #{numeric}"
+        )
+
+    reg.register(Tool(
+        "schedule_task",
+        "Schedule a reminder or recurring task for the user.",
+        {"when": "e.g. 'in 20 minutes', 'every day at 08:00'",
+         "message": "what to remind about"},
+        schedule_task,
+    ))
+    reg.register(Tool(
+        "list_scheduled", "List pending reminders and scheduled routines.",
+        {}, list_scheduled,
+    ))
+    reg.register(Tool(
+        "cancel_scheduled", "Cancel a scheduled task by its id.",
+        {"task_id": "the task id, e.g. 3"}, cancel_scheduled,
+    ))
+
+
 def _register_builtins(reg: ToolRegistry) -> None:
     cfg = reg.config
 
@@ -192,6 +277,23 @@ def _register_builtins(reg: ToolRegistry) -> None:
             out = out[:12_000] + "\n... [truncated]"
         return f"exit code {proc.returncode}\n{out.strip() or '(no output)'}"
 
+    def web_search(query: str) -> str:
+        import httpx
+
+        response = httpx.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={"User-Agent": "Mozilla/5.0 (Jarvis local assistant)"},
+            timeout=15,
+            follow_redirects=True,
+        )
+        results = parse_ddg_results(response.text)
+        if not results:
+            return f"no results (HTTP {response.status_code})"
+        return "\n\n".join(
+            f"{title}\n{url}\n{snippet}" for title, url, snippet in results
+        )
+
     def web_get(url: str) -> str:
         import httpx
 
@@ -228,6 +330,10 @@ def _register_builtins(reg: ToolRegistry) -> None:
     reg.register(Tool(
         "shell", "Run a shell command in the workspace (60 s timeout).",
         {"command": "the command"}, shell, tier=Tier.CONFIRM,
+    ))
+    reg.register(Tool(
+        "web_search", "Search the web (DuckDuckGo) for current information.",
+        {"query": "search terms"}, web_search, tier=Tier.CONFIRM,
     ))
     reg.register(Tool(
         "web_get", "Fetch a URL over HTTP(S).",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis-assistant"
-version = "0.2.0"
+version = "0.3.0"
 description = "A local-first, runs-anywhere JARVIS-class assistant: auto-detects local LLM runtimes, persistent memory, RAG, and a policy-gated agentic tool loop."
 readme = "README.md"
 requires-python = ">=3.10"

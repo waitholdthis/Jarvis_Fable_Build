@@ -17,7 +17,11 @@ from .ingest import ingest_path
 from .llm import LLMClient, NoRuntimeError, detect
 from .mcp import register_mcp_tools
 from .memory import Memory
-from .tools import ToolRegistry
+from .notify import desktop_notify
+from .routines import get_routines, run_routine, sync_routine_schedules
+from .scheduler import Scheduler
+from .tools import ToolRegistry, register_scheduler_tools
+from .vision import register_vision_tool
 from . import voice
 
 console = Console()
@@ -27,6 +31,7 @@ Talk normally, or use a command:
   /ingest <path>   index a file or directory into memory
   /memory          show memory statistics
   /forget <text>   delete memory entries matching text
+  /routine [name]  run a routine (no name = list them)
   /tools           list available tools
   /voice           toggle spoken responses
   /listen          record ~6s from the microphone and send it (needs [voice])
@@ -54,11 +59,17 @@ def _connect(config: Config) -> LLMClient:
     return client
 
 
-def _bootstrap(config: Config, confirm=_confirm, consolidation: bool = True):
-    """Shared startup: LLM, memory, tools, MCP servers, agent, hippocampus.
+def _bootstrap(
+    config: Config,
+    confirm=_confirm,
+    consolidation: bool = True,
+    start_scheduler: bool = True,
+    on_notify=None,
+):
+    """Shared startup: LLM, memory, tools, MCP, scheduler, agent, hippocampus.
 
-    Returns (agent, memory, mcp_servers). Raises NoRuntimeError when no LLM
-    runtime is available; callers print it and exit.
+    Returns (agent, memory, mcp_servers, scheduler). Raises NoRuntimeError
+    when no LLM runtime is available; callers print it and exit.
     """
     config.ensure_dirs()
     llm = _connect(config)
@@ -67,6 +78,31 @@ def _bootstrap(config: Config, confirm=_confirm, consolidation: bool = True):
     mcp_servers = register_mcp_tools(
         tools, config.mcp_servers, notify=lambda t: console.print(f"[dim]{t}[/dim]")
     )
+    register_vision_tool(tools, llm)
+
+    scheduler = Scheduler(config.db_path)
+    register_scheduler_tools(tools, scheduler)
+    sync_routine_schedules(scheduler, get_routines(config))
+
+    def deliver(title: str, body: str) -> None:
+        console.print(f"\n[bold magenta]🔔 {title}[/bold magenta] {body}")
+        desktop_notify(title, body)
+        if config.voice_enabled:
+            voice.speak(f"{title}. {body}")
+        if on_notify is not None:
+            on_notify(title, body)
+
+    def on_due(task) -> None:
+        if task.kind == "routine":
+            body = run_routine(config, llm, memory, tools, task.payload) or ""
+            deliver(f"{config.assistant_name} · {task.payload}", body)
+        else:
+            deliver(f"{config.assistant_name} reminder", task.payload)
+
+    scheduler.on_due = on_due
+    if start_scheduler:
+        scheduler.start()
+
     agent = Agent(config, llm, memory, tools, confirm=confirm)
 
     if consolidation and config.consolidation_enabled:
@@ -87,10 +123,12 @@ def _bootstrap(config: Config, confirm=_confirm, consolidation: bool = True):
 
         threading.Thread(target=hippocampus, daemon=True).start()
 
-    return agent, memory, mcp_servers
+    return agent, memory, mcp_servers, scheduler
 
 
-def _teardown(memory: Memory, mcp_servers: list) -> None:
+def _teardown(memory: Memory, mcp_servers: list, scheduler: Scheduler | None = None) -> None:
+    if scheduler is not None:
+        scheduler.close()
     for server in mcp_servers:
         server.close()
     memory.close()
@@ -135,7 +173,7 @@ def repl(config: Config) -> int:
         )
     )
     try:
-        agent, memory, mcp_servers = _bootstrap(config)
+        agent, memory, mcp_servers, scheduler = _bootstrap(config)
     except NoRuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
@@ -179,6 +217,17 @@ def repl(config: Config) -> int:
                     continue
                 removed = memory.forget(arg)
                 console.print(f"removed {removed} entr{'y' if removed == 1 else 'ies'}")
+            elif cmd == "/routine":
+                routines = get_routines(config)
+                if not arg:
+                    for name in routines:
+                        console.print(f"  {name}")
+                elif arg in routines:
+                    with console.status(f"Running routine '{arg}'..."):
+                        result = run_routine(config, agent.llm, memory, tools, arg)
+                    console.print(result or "(no output)")
+                else:
+                    console.print(f"[red]no routine named '{arg}'[/red]")
             elif cmd == "/tools":
                 console.print(tools.describe_all())
             elif cmd == "/voice":
@@ -212,7 +261,7 @@ def repl(config: Config) -> int:
         except Exception as exc:
             console.print(f"\n[red]error: {type(exc).__name__}: {exc}[/red]")
 
-    _teardown(memory, mcp_servers)
+    _teardown(memory, mcp_servers, scheduler)
     return 0
 
 
@@ -231,7 +280,7 @@ def voice_loop(config: Config, wake: bool = False) -> int:
         return 1
     config.voice_enabled = True
     try:
-        agent, memory, mcp_servers = _bootstrap(config)
+        agent, memory, mcp_servers, scheduler = _bootstrap(config)
     except NoRuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
@@ -272,41 +321,82 @@ def voice_loop(config: Config, wake: bool = False) -> int:
             run_turn(agent, config, heard)
     except KeyboardInterrupt:
         console.print("\nGoodbye.")
-    _teardown(memory, mcp_servers)
+    _teardown(memory, mcp_servers, scheduler)
     return 0
 
 
 def serve_web(config: Config, port: int = 8765) -> int:
     """Run the local web UI (stdlib server, bound to 127.0.0.1)."""
-    from .web import serve
+    from .web import make_server
 
+    # Scheduler notifications also land in the browser; the sink is swapped
+    # in once the server (and its event queue) exists.
+    sink = {"push": lambda event: None}
     try:
-        agent, memory, mcp_servers = _bootstrap(config)
+        agent, memory, mcp_servers, scheduler = _bootstrap(
+            config,
+            on_notify=lambda title, body: sink["push"](
+                {"kind": "notify", "title": title, "text": body}
+            ),
+        )
     except NoRuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
+    server = make_server(agent, host="127.0.0.1", port=port)
+    sink["push"] = server.ui.push
     console.print(
         f"[green]✓[/green] web UI at [bold cyan]http://127.0.0.1:{port}[/bold cyan] "
         "(local machine only — Ctrl-C to stop)"
     )
     try:
-        serve(agent, host="127.0.0.1", port=port)
+        server.serve_forever()
     except KeyboardInterrupt:
         console.print("\nStopped.")
     finally:
-        _teardown(memory, mcp_servers)
+        server.server_close()
+        _teardown(memory, mcp_servers, scheduler)
     return 0
 
 
 def ask_once(config: Config, question: str) -> int:
     """One-shot mode: `jarvis ask "..."` for scripts and quick queries."""
     try:
-        agent, memory, mcp_servers = _bootstrap(config, consolidation=False)
+        agent, memory, mcp_servers, scheduler = _bootstrap(
+            config, consolidation=False, start_scheduler=False
+        )
     except NoRuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
     run_turn(agent, config, question)
-    _teardown(memory, mcp_servers)
+    _teardown(memory, mcp_servers, scheduler)
+    return 0
+
+
+def routine_cmd(config: Config, name: str = "") -> int:
+    """`jarvis routine [name]` / `jarvis briefing`: run or list routines."""
+    routines = get_routines(config)
+    if not name:
+        console.print("[bold]routines:[/bold]")
+        for routine_name, spec in routines.items():
+            schedule = spec.get("schedule")
+            extra = f" (scheduled: {schedule})" if schedule else ""
+            console.print(f"  {routine_name}{extra}")
+        return 0
+    if name not in routines:
+        console.print(f"[red]no routine named '{name}'[/red]")
+        return 1
+    try:
+        agent, memory, mcp_servers, scheduler = _bootstrap(
+            config, consolidation=False, start_scheduler=False
+        )
+    except NoRuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    with console.status(f"Running routine '{name}'..."):
+        result = run_routine(config, agent.llm, memory, agent.tools, name)
+    console.print(result or "(no output)")
+    _speak_if_enabled(config, result or "")
+    _teardown(memory, mcp_servers, scheduler)
     return 0
 
 

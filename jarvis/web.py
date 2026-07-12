@@ -220,6 +220,9 @@ _PAGE = """<!doctype html>
   .allow { background: #238636; color: #fff; }
   .deny  { background: #21262d; color: #e6edf3; }
   .error { max-width: 52rem; margin: 0 auto 12px; color: #f85149; }
+  .notify { max-width: 52rem; margin: 0 auto 12px; padding: 10px 14px;
+            border-radius: 10px; background: #0d2818; border: 1px solid #238636; }
+  .notify b { color: #3fb950; }
   form { display: flex; gap: 8px; padding: 12px 16px;
          border-top: 1px solid #21262d; }
   input[type=text] { flex: 1; padding: 10px 14px; border-radius: 10px;
@@ -281,6 +284,12 @@ function handle(ev) {
       };
       el.appendChild(b);
     }
+  } else if (ev.kind === 'notify') {
+    const el = add('notify', '');
+    const b = document.createElement('b');
+    b.textContent = '\\ud83d\\udd14 ' + (ev.title || 'Notification') + ' ';
+    el.appendChild(b);
+    el.append(ev.text || '');
   } else if (ev.kind === 'error') {
     add('error', ev.text);
   } else if (ev.kind === 'done') {
