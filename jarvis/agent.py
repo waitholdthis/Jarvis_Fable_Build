@@ -55,6 +55,7 @@ Rules:
   answer. Do not repeat identical tool calls.
 - If a tool is denied or errors, adapt or tell the user plainly.
 - For ordinary conversation, just answer: no tool block.
+{response_style}
 
 ## Memory
 {memory_context}"""
@@ -121,15 +122,22 @@ class Agent:
     def _system_prompt(self, user_input: str) -> str:
         import datetime
 
+        fast = self.config.fast_mode
+
         return _SYSTEM_TEMPLATE.format(
             persona=self.config.persona.format(name=self.config.assistant_name),
             date=datetime.date.today().isoformat(),
-            tools=self.tools.describe_all(),
+            tools=(self.tools.describe_for(user_input) if fast else self.tools.describe_all()),
             memory_context=self._memory_context(user_input),
+            response_style=(
+                "- FAST EVERYDAY MODE: lead with the answer or completed work. Keep routine "
+                "replies to 1-4 short sentences unless the user requests detail."
+                if fast else ""
+            ),
         )
 
     def _trim_history(self) -> None:
-        budget = self.config.max_context_chars
+        budget = min(self.config.max_context_chars, 10_000) if self.config.fast_mode else self.config.max_context_chars
         total = sum(len(m["content"]) for m in self.messages)
         while len(self.messages) > 4 and total > budget:
             dropped = self.messages.pop(0)

@@ -41,6 +41,7 @@ class LLMClient:
     api_key: str = ""
     runtime_name: str = "custom"
     timeout: float = 300.0
+    keep_alive: str = "30m"
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -58,6 +59,8 @@ class LLMClient:
             "temperature": temperature,
             "stream": True,
         }
+        if "127.0.0.1:11434" in self.api_base or "localhost:11434" in self.api_base:
+            payload["keep_alive"] = self.keep_alive
         url = f"{self.api_base.rstrip('/')}/chat/completions"
         with httpx.Client(timeout=self.timeout) as client:
             with client.stream(
@@ -240,6 +243,7 @@ def detect(config: Config) -> LLMClient:
             model=model,
             api_key=config.api_key,
             runtime_name=name,
+            keep_alive=config.ollama_keep_alive,
         )
 
     raise NoRuntimeError(

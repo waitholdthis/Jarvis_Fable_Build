@@ -70,6 +70,9 @@ def test_index_page_serves_html(server):
     assert response.status_code == 200
     assert "Jarvis" in response.text
     assert "EventSource" in response.text
+    assert 'id="voice-select"' in response.text
+    assert 'id="voice-preview"' in response.text
+    assert "jarvis-voice-name" in response.text
 
 
 def test_stats_endpoint(server):

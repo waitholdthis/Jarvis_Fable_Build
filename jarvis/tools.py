@@ -70,11 +70,34 @@ class ToolRegistry:
         return self.tools.get(name)
 
     def describe_all(self) -> str:
+        return self._describe(self.tools.values())
+
+    @staticmethod
+    def _describe(tools) -> str:
         lines = []
-        for tool in self.tools.values():
+        for tool in tools:
             flag = " (asks permission)" if tool.tier is Tier.CONFIRM else ""
             lines.append(f"- {tool.signature()}: {tool.description}{flag}")
         return "\n".join(lines)
+
+    def describe_for(self, query: str, limit: int = 28) -> str:
+        """Compact, request-aware catalog for low-latency local inference."""
+        core = {
+            "current_time", "system_info", "read_file", "write_file", "list_dir",
+            "search_memory", "remember_fact", "schedule_task", "list_scheduled",
+            "cancel_scheduled", "web_search", "web_get", "run_diagnostics",
+            "privacy_scan", "situation_room", "workspace_radar",
+        }
+        words = {
+            word for word in re.findall(r"[a-z0-9_]+", query.lower())
+            if len(word) >= 4
+        }
+        selected: list[Tool] = []
+        for tool in self.tools.values():
+            haystack = f"{tool.name} {tool.description} {' '.join(tool.params)}".lower()
+            if tool.name in core or any(word in haystack for word in words):
+                selected.append(tool)
+        return self._describe(selected[:limit])
 
     def run(self, name: str, args: dict) -> str:
         tool = self.get(name)

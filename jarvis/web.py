@@ -381,6 +381,8 @@ _PAGE = """<!doctype html>
   .module-body { padding:14px; } .module-copy { color:#749ba4; font-size:12px; margin:0 0 14px; }
   .control-row { display:flex; gap:8px; margin-top:9px; }
   .control-row input { min-width:0; flex:1; padding:9px 10px; color:#dffaff; background:#031117; border:1px solid var(--line); outline:0; }
+  .voice-select { width:100%; margin-top:10px; padding:9px 10px; color:#dffaff; background:#031117; border:1px solid var(--line); outline:0; font:10px Space Mono,monospace; }
+  .voice-select:focus { border-color:var(--cyan); box-shadow:0 0 12px #3ae3ff18; }
   .action { padding:8px 11px; border:1px solid rgba(88,230,255,.32); color:var(--cyan); background:#09252e; font:10px Space Mono,monospace; cursor:pointer; }
   .action.danger { color:#ff938c; border-color:#ff938c55; background:#271013; }
   .tool-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; max-height:300px; overflow:auto; }
@@ -416,7 +418,7 @@ _PAGE = """<!doctype html>
 <section class="dashboard" id="dashboard" aria-hidden="true"><div class="dash-head"><div><div class="eyebrow">JARVIS operations suite</div><h2>Command Center</h2></div><button class="nav-button" id="dashboard-close">RETURN TO DIALOGUE</button></div><div class="dash-grid">
  <article class="panel module"><div class="panel-title eyebrow">Runtime intelligence</div><div class="module-body runtime-card"><div><span class="eyebrow">Runtime</span><strong id="d-runtime">—</strong></div><div><span class="eyebrow">Model</span><strong id="d-model">—</strong></div><div style="grid-column:1/-1"><span class="eyebrow">Secure workspace</span><strong id="d-workspace">—</strong></div></div></article>
  <article class="panel module wide"><div class="panel-title eyebrow">Cognitive engine router</div><div class="module-body"><p class="module-copy">Switch JARVIS's reasoning engine while retaining the same memory, missions, tools, and personality. Keys remain in environment variables and are never returned to this page.</p><div class="provider-grid" id="provider-grid"></div></div></article>
- <article class="panel module"><div class="panel-title eyebrow">Voice systems</div><div class="module-body"><p class="module-copy">Control spoken-response output. Microphone capture remains available through the native voice interface.</p><strong class="mono" id="voice-state">VOICE OUTPUT —</strong><div class="control-row"><button class="action" data-action="toggle_voice">TOGGLE VOICE OUTPUT</button></div></div></article>
+ <article class="panel module"><div class="panel-title eyebrow">Voice systems</div><div class="module-body"><p class="module-copy">Choose the browser voice used for spoken replies. Your selection is saved on this desktop.</p><strong class="mono" id="voice-state">VOICE OUTPUT —</strong><select class="voice-select" id="voice-select" aria-label="JARVIS voice"><option value="">Loading installed voices…</option></select><div class="control-row"><button class="action" data-action="toggle_voice">TOGGLE VOICE OUTPUT</button><button class="action" id="voice-preview" type="button">PREVIEW VOICE</button></div></div></article>
  <article class="panel module"><div class="panel-title eyebrow">Session control</div><div class="module-body"><p class="module-copy">Reset short-term dialogue context while preserving JARVIS's long-term memory.</p><button class="action danger" data-action="clear_conversation">CLEAR ACTIVE CONVERSATION</button></div></article>
  <article class="panel module wide"><div class="panel-title eyebrow">Knowledge ingestion</div><div class="module-body"><p class="module-copy">Index a text file or directory from your home folder into semantic memory.</p><div class="control-row"><input id="ingest-path" placeholder="~/Documents/notes"><button class="action" id="ingest-button">INDEX PATH</button></div></div></article>
  <article class="panel module"><div class="panel-title eyebrow">Memory redaction</div><div class="module-body"><p class="module-copy">Permanently remove memory entries matching a phrase or source.</p><div class="control-row"><input id="forget-text" placeholder="Text to forget"><button class="action danger" id="forget-button">FORGET</button></div></div></article>
@@ -430,11 +432,13 @@ const send = document.getElementById('send');
 const core = document.getElementById('core');
 const mic = document.getElementById('mic');
 const speaker = document.getElementById('speaker');
+const voiceSelect = document.getElementById('voice-select');
 let botEl = null;
 let dashboardData = null;
 let recognition = null;
 let listening = false;
 let spokenReplies = localStorage.getItem('jarvis-spoken-replies') !== 'off';
+let selectedVoiceName = localStorage.getItem('jarvis-voice-name') || '';
 
 function initOrb(){
   const canvas=document.getElementById('orb-canvas');
@@ -544,17 +548,31 @@ fetch('/api/stats').then(r=>r.json()).then(s=>{document.getElementById('semantic
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{box.value=b.dataset.prompt;box.focus();});
 
 function setSpeakerState(){speaker.classList.toggle('speaking',spokenReplies);speaker.title=spokenReplies?'Spoken replies enabled':'Spoken replies muted';speaker.setAttribute('aria-pressed',String(spokenReplies));}
+function availableVoices(){return 'speechSynthesis' in window?speechSynthesis.getVoices():[];}
+function selectedVoice(){
+  const voices=availableVoices();
+  return voices.find(v=>v.name===selectedVoiceName)||voices.find(v=>/Daniel|Google UK English Male|Microsoft David|Alex/i.test(v.name))||voices.find(v=>v.lang?.startsWith('en'))||voices[0];
+}
+function populateVoices(){
+  const voices=availableVoices();
+  if(!voices.length){voiceSelect.innerHTML='<option value="">No browser voices available</option>';voiceSelect.disabled=true;return;}
+  voiceSelect.disabled=false;voiceSelect.innerHTML='';
+  for(const voice of voices){const option=document.createElement('option');option.value=voice.name;option.textContent=`${voice.name} (${voice.lang})${voice.default?' — Default':''}`;voiceSelect.appendChild(option);}
+  const chosen=selectedVoice();if(chosen){selectedVoiceName=chosen.name;voiceSelect.value=chosen.name;localStorage.setItem('jarvis-voice-name',chosen.name);}
+}
 function speakReply(text){
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel(); const utterance=new SpeechSynthesisUtterance(text);
   utterance.rate=.96; utterance.pitch=.88;
-  const voices=speechSynthesis.getVoices(); const preferred=voices.find(v=>/Daniel|Google UK English Male|Microsoft David|Alex/i.test(v.name))||voices.find(v=>v.lang?.startsWith('en'));
-  if(preferred) utterance.voice=preferred;
+  const voice=selectedVoice();if(voice)utterance.voice=voice;
   utterance.onstart=()=>{speaker.classList.add('active');core.classList.add('active');document.getElementById('mode').textContent='VOICE OUTPUT ACTIVE';};
   utterance.onend=utterance.onerror=()=>{speaker.classList.remove('active');core.classList.remove('active');document.getElementById('mode').textContent='AWAITING DIRECTIVE';box.focus();};
   speechSynthesis.speak(utterance);
 }
 speaker.onclick=()=>{spokenReplies=!spokenReplies;localStorage.setItem('jarvis-spoken-replies',spokenReplies?'on':'off');if(!spokenReplies&&'speechSynthesis' in window)speechSynthesis.cancel();setSpeakerState();toast(spokenReplies?'Spoken replies enabled.':'Spoken replies muted.');};
+voiceSelect.onchange=()=>{selectedVoiceName=voiceSelect.value;localStorage.setItem('jarvis-voice-name',selectedVoiceName);toast(`Voice set to ${selectedVoiceName}.`);};
+document.getElementById('voice-preview').onclick=()=>speakReply('Good evening. JARVIS voice systems are online.');
+populateVoices();if('speechSynthesis' in window)speechSynthesis.onvoiceschanged=populateVoices;
 setSpeakerState();
 
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;

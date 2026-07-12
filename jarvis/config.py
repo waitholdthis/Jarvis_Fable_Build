@@ -26,6 +26,8 @@ class Config:
     model: str = ""
     temperature: float = 0.7
     max_context_chars: int = 24_000
+    fast_mode: bool = False
+    ollama_keep_alive: str = "30m"
 
     # Agent loop
     max_tool_iterations: int = 6
@@ -170,6 +172,10 @@ class Config:
             cfg.api_base = os.environ["JARVIS_API_BASE"]
         if os.environ.get("JARVIS_MODEL"):
             cfg.model = os.environ["JARVIS_MODEL"]
+        if os.environ.get("JARVIS_FAST_MODE"):
+            cfg.fast_mode = os.environ["JARVIS_FAST_MODE"].strip().lower() in (
+                "1", "true", "yes", "on"
+            )
         return cfg
 
     def provider_key(self, provider: str) -> str:

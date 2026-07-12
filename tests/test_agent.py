@@ -105,3 +105,13 @@ def test_memory_context_reaches_system_prompt(tmp_path):
     system = llm.calls[0][0]
     assert system["role"] == "system"
     assert "hunter2" in system["content"]
+
+
+def test_fast_mode_uses_compact_relevant_tool_catalog(tmp_path):
+    agent, _, llm = make_agent(tmp_path, ["It is handled."])
+    agent.config.fast_mode = True
+    list(agent.run("check the current time"))
+    prompt = llm.calls[0][0]["content"]
+    assert "FAST EVERYDAY MODE" in prompt
+    assert "current_time(" in prompt
+    assert "agent_council(" not in prompt
