@@ -46,6 +46,14 @@ class Config:
     voice_enabled: bool = False
     whisper_model: str = "base"
 
+    # MCP servers: {name: {"command": ["exe", "arg", ...]}}
+    mcp_servers: dict = field(default_factory=dict)
+
+    # Background memory consolidation (the "hippocampus" job)
+    consolidation_enabled: bool = True
+    consolidation_min_new: int = 12
+    consolidation_interval_hours: float = 12.0
+
     @property
     def db_path(self) -> Path:
         return self.home / "memory.db"

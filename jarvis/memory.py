@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS semantic (
     embedder TEXT NOT NULL,
     embedding BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_episodic_ts ON episodic (ts);
 CREATE INDEX IF NOT EXISTS idx_semantic_source ON semantic (source);
 """
@@ -98,6 +102,33 @@ class Memory:
             ).fetchall()
         return list(reversed(rows))
 
+    def episodic_since(self, after_id: int, limit: int = 400) -> list[tuple[int, str, str]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, role, content FROM episodic WHERE id > ?"
+                " ORDER BY id ASC LIMIT ?",
+                (after_id, limit),
+            ).fetchall()
+        return rows
+
+    # ---- meta (key/value bookkeeping, e.g. consolidation watermark) --------
+
+    def get_meta(self, key: str, default: str = "") -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+        return row[0] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            self._conn.commit()
+
     # ---- semantic tier ----------------------------------------------------
 
     def remember(self, content: str, source: str = "", kind: str = "doc") -> int:
@@ -140,6 +171,14 @@ class Memory:
 
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[:top_k]
+
+    def fact_exists(self, content: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM semantic WHERE kind = 'fact' AND content = ? LIMIT 1",
+                (content,),
+            ).fetchone()
+        return row is not None
 
     def forget(self, pattern: str) -> int:
         """Delete semantic rows whose content or source matches a substring."""

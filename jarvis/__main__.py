@@ -25,7 +25,18 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="run the local web UI")
     serve.add_argument("--port", type=int, default=8765, help="port (default 8765)")
 
-    sub.add_parser("voice", help="hands-free voice conversation (needs [voice])")
+    voice_cmd = sub.add_parser(
+        "voice", help="hands-free voice conversation (needs [voice])"
+    )
+    voice_cmd.add_argument(
+        "--wake",
+        action="store_true",
+        help='only respond when addressed by name ("Jarvis, ...")',
+    )
+
+    sub.add_parser(
+        "consolidate", help="distill recent conversations into long-term facts now"
+    )
 
     sub.add_parser("doctor", help="check runtimes, voice, and memory health")
 
@@ -60,7 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "voice":
         from .cli import voice_loop
 
-        return voice_loop(config)
+        return voice_loop(config, wake=args.wake)
+
+    if args.command == "consolidate":
+        from .cli import consolidate_now
+
+        return consolidate_now(config)
 
     if args.command == "doctor":
         return _doctor(config)
@@ -103,6 +119,20 @@ def _doctor(config) -> int:
             "  voice input: [yellow]not installed[/yellow] "
             "(pip install 'jarvis-assistant\\[voice]')"
         )
+    if config.mcp_servers:
+        import shutil
+
+        for name, spec in config.mcp_servers.items():
+            command = spec.get("command") if isinstance(spec, dict) else None
+            if not isinstance(command, list) or not command:
+                console.print(f"  mcp '{name}': [red]missing command in config[/red]")
+            elif shutil.which(str(command[0])):
+                console.print(f"  mcp '{name}': [green]command found[/green] ({command[0]})")
+            else:
+                console.print(f"  mcp '{name}': [yellow]'{command[0]}' not on PATH[/yellow]")
+    else:
+        console.print("  mcp servers: none configured (optional)")
+
     console.print(f"  workspace: {config.workspace}")
     return 0
 

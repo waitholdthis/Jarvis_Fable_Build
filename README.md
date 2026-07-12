@@ -35,20 +35,21 @@ tools), scaled from a dual-GPU node down to a laptop.
   (no web framework): streaming via Server-Sent Events, live tool-call
   visibility, and in-browser Allow/Deny buttons for permission-gated tools.
   Localhost-only by design.
+- **Wake word** — `jarvis voice --wake` only responds when addressed
+  ("Jarvis, ..."), fuzzy-matched on the transcript so ASR slips like
+  "Jarvus" still work, with no separate wake-word model to download. Say
+  just the name and it answers "Yes?" and listens for your command.
+- **MCP tool servers** — connect any Model Context Protocol server
+  (filesystem, git, browsers, home automation...) by listing it in the
+  config; its tools appear alongside the built-ins, always behind the
+  Allow/Deny permission gate. The stdio JSON-RPC client is stdlib-only.
+- **Memory consolidation** — a background "hippocampus" job periodically
+  replays recent conversations and asks the model to distill durable facts
+  ("the user's staging server is X") into long-term memory, where retrieval
+  finds them in future sessions. Runs automatically at startup (at most
+  once per 12 h), or on demand with `jarvis consolidate`.
 
-## Quickstart
-
-```bash
-# 1. Have a model runtime. The zero-config path is Ollama:
-#      https://ollama.com  →  ollama pull qwen2.5:7b
-#    (LM Studio, llamafile, llama.cpp server, vLLM, and Jan also work.)
-
-# 2. Install Jarvis
-pip install -e .
-
-# 3. Talk
-jarvis
-```
+## What it feels like
 
 ```
 you: what's on this machine?
@@ -70,9 +71,66 @@ Jarvis: According to [notes/db-plan.md], you planned to...
 | `jarvis ask "..."` | one-shot question, for scripts |
 | `jarvis ingest <path>` | index files into memory |
 | `jarvis serve [--port N]` | local web UI at 127.0.0.1:8765 |
-| `jarvis voice` | hands-free voice conversation (needs `[voice]`) |
+| `jarvis voice [--wake]` | hands-free voice chat; `--wake` = respond only to "Jarvis, ..." |
+| `jarvis consolidate` | distill recent conversations into long-term facts now |
 | `jarvis doctor` | show what this machine supports |
 | `/ingest` `/memory` `/forget` `/tools` `/voice` `/listen` `/new` | in-chat commands |
+
+## Run it on your desktop
+
+Full setup from a blank machine to a talking assistant.
+
+**1. Install a model runtime** (pick one):
+
+- **Ollama** (easiest, all platforms): install from [ollama.com](https://ollama.com), then
+  `ollama pull qwen2.5:7b` (good all-rounder; use `qwen2.5:3b` on 8 GB
+  machines, `qwen2.5:14b`/`32b` if you have the RAM/VRAM).
+- **LM Studio**: install from [lmstudio.ai](https://lmstudio.ai), download a model, and start
+  the local server (Developer tab → Start Server).
+- Already running llama.cpp / vLLM / llamafile / Jan? Nothing to do —
+  Jarvis will find it.
+
+**2. Install Jarvis** (needs Python ≥ 3.10):
+
+```bash
+# Linux / macOS
+git clone https://github.com/waitholdthis/Jarvis_Fable_Build.git
+cd Jarvis_Fable_Build
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+# Windows (PowerShell)
+git clone https://github.com/waitholdthis/Jarvis_Fable_Build.git
+cd Jarvis_Fable_Build
+py -m venv .venv; .venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+**3. Check and go:**
+
+```bash
+jarvis doctor    # verifies runtime, memory, voice, MCP config
+jarvis           # chat in the terminal
+jarvis serve     # or chat in the browser at http://127.0.0.1:8765
+```
+
+**4. Optional — give it ears and a voice:**
+
+```bash
+pip install -e ".[voice]"
+jarvis voice          # hands-free: talk, it answers aloud
+jarvis voice --wake   # only responds to "Jarvis, ..."
+```
+
+On Linux also install PortAudio and a speech engine:
+`sudo apt install libportaudio2 espeak-ng`. macOS and Windows use their
+built-in speech synthesis out of the box.
+
+**5. Optional — feed it your files:**
+
+```bash
+jarvis ingest ~/Documents/notes
+```
 
 ### Configuration
 
@@ -83,7 +141,16 @@ Zero config is the default. To override, set environment variables or create
 api_base = "http://127.0.0.1:11434/v1"   # any OpenAI-compatible endpoint
 model = "qwen2.5:7b"
 temperature = 0.7
-assistant_name = "Jarvis"
+assistant_name = "Jarvis"                # also the wake word
+whisper_model = "base"                   # ASR size: tiny/base/small/medium
+consolidation_enabled = true
+
+# Any MCP tool server, by name. Its tools join the registry (confirm-gated).
+[mcp_servers.time]
+command = ["uvx", "mcp-server-time"]
+
+[mcp_servers.files]
+command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me/notes"]
 ```
 
 Environment: `JARVIS_API_BASE`, `JARVIS_MODEL`, `JARVIS_API_KEY`,

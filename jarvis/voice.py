@@ -9,7 +9,9 @@ TTS: pyttsx3 if installed, else the platform's native speech command
 
 from __future__ import annotations
 
+import difflib
 import platform
+import re
 import shutil
 import subprocess
 
@@ -40,6 +42,26 @@ def record_and_transcribe(seconds: float = 6.0, model_size: str = "base") -> str
     model = _get_whisper(model_size)
     segments, _info = model.transcribe(np.squeeze(audio), beam_size=1, vad_filter=True)
     return " ".join(seg.text.strip() for seg in segments).strip()
+
+
+def strip_wake_word(text: str, name: str = "jarvis") -> str | None:
+    """Wake-word gate on the transcript.
+
+    Whisper already produced words, so instead of a separate wake-word model
+    (another dependency, another download) we fuzzy-match the assistant's
+    name against the first few words — tolerant of ASR slips like "jervis"
+    or "jarvus". Returns the command with the wake word removed, "" if the
+    utterance was ONLY the wake word (caller should prompt and listen
+    again), or None if the assistant was not addressed.
+    """
+    target = name.lower()
+    matches = list(re.finditer(r"[A-Za-z']+", text))
+    for match in matches[:3]:
+        ratio = difflib.SequenceMatcher(None, match.group(0).lower(), target).ratio()
+        if ratio >= 0.75:
+            remainder = text[match.end():].lstrip(" \t,.!?:;-")
+            return remainder.strip()
+    return None
 
 
 def listen_until_silence(
