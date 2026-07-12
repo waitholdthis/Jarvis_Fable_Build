@@ -40,7 +40,7 @@ class LLMClient:
     model: str
     api_key: str = ""
     runtime_name: str = "custom"
-    timeout: float = 120.0
+    timeout: float = 300.0
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -92,7 +92,7 @@ class AnthropicClient:
     model: str
     api_base: str = "https://api.anthropic.com/v1"
     runtime_name: str = "Claude"
-    timeout: float = 120.0
+    timeout: float = 300.0
 
     def chat_stream(self, messages: list[dict], temperature: float = 0.7) -> Iterator[str]:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -128,7 +128,7 @@ class GeminiClient:
     model: str
     api_base: str = "https://generativelanguage.googleapis.com/v1beta"
     runtime_name: str = "Gemini"
-    timeout: float = 120.0
+    timeout: float = 300.0
 
     def chat_stream(self, messages: list[dict], temperature: float = 0.7) -> Iterator[str]:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")

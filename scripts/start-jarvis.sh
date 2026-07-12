@@ -66,6 +66,18 @@ if command -v ollama &>/dev/null; then
             warn "Ollama log: $OLLAMA_LOG"
         fi
     fi
+
+    # Pre-warm the configured model so the first user message responds instantly.
+    # Reads model from config.toml; falls back to llama3.2:3b.
+    if _ollama_ok; then
+        WARMUP_MODEL=$(grep '^model' "$CONFIG" 2>/dev/null | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/' || echo "llama3.2:3b")
+        WARMUP_MODEL="${WARMUP_MODEL:-llama3.2:3b}"
+        log "Pre-warming model: $WARMUP_MODEL ..."
+        curl -fsS --max-time 180 http://127.0.0.1:11434/api/generate \
+            -d "{\"model\":\"$WARMUP_MODEL\",\"prompt\":\"hi\",\"stream\":false}" \
+            >/dev/null 2>&1 && ok "Model $WARMUP_MODEL warm" \
+            || warn "Warmup timed out — first response may be slow"
+    fi
 else
     warn "Ollama not installed — for local LLM inference run:"
     warn "  curl -fsSL https://ollama.com/install.sh | sh && ollama pull qwen2.5:7b"
